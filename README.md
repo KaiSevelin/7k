@@ -92,15 +92,26 @@ Nothing is implemented. **7K is three layers and nothing else** — it describes
 nothing. Code generation, deployment and execution belong to implementations outside the language, and so
 do Core, Sandbox and Spider.
 
-## Suggested first milestone
+## Building it
 
-Deliberately narrow, because the scope of the full idea is roughly four products:
+```
+npm install
+npm test            # 121 tests
+npm run check       # lexes every example and every 7k block in the spec
+```
 
-1. Lossless parser (CST) and IR for the Contract and Topology layers — see [D19](docs/decisions.md)
-2. Four analyses: `orphan-message`, `envelope-break`, `internal-leak`, `package-cycle`
-3. Sandbox with a virtual clock, three services, one pipe kind, text trace output
-4. One saga with one compensation and one timeout
+| Step | State |
+|---|---|
+| **1** Lossless lexer, `7k check` over examples and spec code blocks | **done** |
+| **2** CST and a recursive-descent parser over the same corpus | next |
+| **3** Name resolution, IR, and four analyses — `orphan-message`, `envelope-break`, `internal-leak`, `package-cycle` | |
+| **4** Sandbox: virtual clock, quiescence loop, text trace, scenarios running headless | |
+| **5** Spider, read-only: graph, sequence and timeline from a trace file | |
 
-No Spider, no codegen, no infrastructure. A text trace proves the model. Multi-language generation
-is the *last* thing to build — it is also the thing most likely to reveal the IR is wrong, which is
-exactly why the IR should be stable first.
+Code generation is deliberately last: it is the thing most likely to reveal the IR is wrong, so the
+IR should be stable before anything depends on its shape.
+
+**Why the lexer first.** Every defect found while writing the specification was drift between a
+decision and the code blocks illustrating it — nothing caught it, because the spec was prose and the
+examples were decoration. `7k check` now lexes 47 units on every commit, so a decision cannot change
+without the spec and examples following.
