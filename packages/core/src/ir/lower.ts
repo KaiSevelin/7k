@@ -26,8 +26,13 @@ import { lowerPredicate } from "./predicate.js";
 import {
   type SagaIr,
   RETRY_DEFAULT,
+  type AssignIr,
+  type AwaitIr,
   type ConstraintIr,
   type RetryIr,
+  type SagaAction,
+  type Terminal,
+  type TimeoutIr,
   type Decl,
   type DeclKind,
   type EmitIr,
@@ -587,12 +592,102 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
   };
 }
 
-function lowerSaga(
-  ctx: Ctx,
-  n: CstNode,
-  base: DeclBaseFields,
-  id: NodeIdOf<"saga">,
-): SagaIr {
+/**
+ * `chargeId = message.chargeId`, `note = absent`, `tier = "gold"`.
+ *
+ * The source is a scoped path, the `absent` keyword, or a literal. Read by shape rather
+ * than by position, because any of the three may follow the `=`.
+ */
+function assignOf(ctx: Ctx, n: CstNode): AssignIr | undefined {
+  const paths = childNodes(n, "Path");
+  const target = paths[0];
+  if (target === undefined) return undefined;
+
+  const span = spanOf(ctx.file, n);
+  const toks = childTokens(n);
+  const scope = toks.find(
+    (t) => t.keyword === "message" || t.keyword === "envelope" || t.keyword === "claim",
+  );
+
+  if (scope !== undefined) {
+    const inner = paths[1];
+    return {
+      target: pathSegments(target),
+      source: {
+        from: scope.keyword as "message" | "envelope" | "claim",
+        path: inner === undefined ? [] : pathSegments(inner),
+      },
+      span,
+    };
+  }
+
+  if (toks.some((t) => t.keyword === "absent")) {
+    return { target: pathSegments(target), source: { from: "absent" }, span };
+  }
+
+  const literal = toks.find(
+    (t) =>
+      t.kind === "string" ||
+      t.kind === "int" ||
+      t.kind === "decimal" ||
+      t.keyword === "true" ||
+      t.keyword === "false",
+  );
+  if (literal !== undefined) {
+    return { target: pathSegments(target), source: { from: "literal", value: literalValue(literal) }, span };
+  }
+
+  // A bare path on the right, which only a half-written assignment produces.
+  const bare = paths[1];
+  if (bare === undefined) return undefined;
+  return { target: pathSegments(target), source: { from: "message", path: pathSegments(bare) }, span };
+}
+
+const literalValue = (t: Token): string | number | boolean => {
+  if (t.kind === "string") return JSON.parse(t.text) as string;
+  if (t.kind === "int") return Number(t.text.replaceAll("_", ""));
+  // A decimal stays a string: it must not round-trip through a double.
+  if (t.kind === "decimal") return t.text;
+  return t.keyword === "true";
+};
+
+const pathSegments = (n: CstNode): string[] =>
+  childTokens(n)
+    .filter((t) => t.kind === "ident")
+    .map((t) => t.text);
+
+const assignsIn = (ctx: Ctx, n: CstNode | undefined): AssignIr[] =>
+  n === undefined
+    ? []
+    : childNodes(n, "Assign")
+        .map((a) => assignOf(ctx, a))
+        .filter((a): a is AssignIr => a !== undefined);
+
+/**
+ * The action on an `on` clause. No `Action` node at all means "continue to the next
+ * step", which is why that case carries an empty assignment list rather than being
+ * absent (`04-process.md` 1.3).
+ */
+function actionOf(ctx: Ctx, on: CstNode): SagaAction {
+  const action = childNodes(on, "Action")[0];
+  if (action === undefined) return { a: "continue", assigns: [] };
+
+  const words = childTokens(action)
+    .filter((t) => t.keyword !== undefined)
+    .map((t) => t.keyword!);
+
+  if (words.includes("abandon")) return { a: "abandon" };
+  if (words.includes("reject")) {
+    const reason = childTokens(action).find((t) => t.kind === "string");
+    return {
+      a: "reject",
+      ...(reason === undefined ? {} : { reason: JSON.parse(reason.text) as string }),
+    };
+  }
+  return { a: "continue", assigns: assignsIn(ctx, childNodes(action, "Body")[0] ?? action) };
+}
+
+function lowerSaga(ctx: Ctx, n: CstNode, base: DeclBaseFields, id: NodeIdOf<"saga">): SagaIr {
   const body = childNodes(n, "Body")[0];
   const version = versionOf(childTokens(n).find((t) => t.kind === "version")?.text);
 
@@ -609,6 +704,7 @@ function lowerSaga(
           ...(childNodes(startNode, "Path")[0] !== undefined
             ? { keyedBy: joinAll(childNodes(startNode, "Path")[0]!).trim() }
             : {}),
+          assigns: assignsIn(ctx, childNodes(startNode, "Body")[0]),
         };
 
   const stateNode = body === undefined ? undefined : childNodes(body, "StateDecl")[0];
@@ -620,22 +716,30 @@ function lowerSaga(
     const ons = sb === undefined ? [] : childNodes(sb, "OnStmt");
     const undoNode = sb === undefined ? undefined : childNodes(sb, "UndoStmt")[0];
 
-    const awaits: { message: Ref; keyedBy?: string; span: Span }[] = [];
-    let timeout: string | undefined;
+    const awaits: AwaitIr[] = [];
+    let timeout: TimeoutIr | undefined;
+
     for (const on of ons) {
       const trigger = childNodes(on, "Trigger")[0];
       if (trigger === undefined) continue;
+
       if (kwOf(trigger) === "timeout") {
-        timeout = childTokens(trigger).find((t) => t.kind === "duration")?.text;
+        const text = childTokens(trigger).find((t) => t.kind === "duration")?.text;
+        const afterMs = text === undefined ? undefined : parseDuration(text);
+        if (afterMs !== undefined) {
+          timeout = { afterMs, action: actionOf(ctx, on), span: spanOf(ctx.file, on) };
+        }
         continue;
       }
-      const q = childNodes(trigger, "QName")[0];
-      const r = ref(ctx, q);
+
+      const r = ref(ctx, childNodes(trigger, "QName")[0]);
       if (r === undefined) continue;
+      // `keyed by` sits on the OnStmt, outside the Trigger.
       const keyed = childNodes(on, "Path")[0];
       awaits.push({
         message: r,
         ...(keyed !== undefined ? { keyedBy: joinAll(keyed).trim() } : {}),
+        action: actionOf(ctx, on),
         span: spanOf(ctx.file, on),
       });
     }
@@ -645,7 +749,7 @@ function lowerSaga(
       name: declName(s)?.name ?? "",
       ...(sendRef !== undefined ? { send: sendRef } : {}),
       awaits,
-      ...(timeout !== undefined ? { timeout } : {}),
+      ...(timeout === undefined ? {} : { timeout }),
       undo:
         undoNode === undefined
           ? undefined
@@ -658,13 +762,16 @@ function lowerSaga(
 
   // Saga-level `on` statements: the deadline and the terminal sends.
   const sagaOns = body === undefined ? [] : childNodes(body, "OnStmt");
-  let deadline: string | undefined;
-  const terminals: { on: string; send: Ref }[] = [];
+  let deadlineMs: number | undefined;
+  const terminals: { on: Terminal; send: Ref }[] = [];
+
   for (const on of sagaOns) {
     const trigger = childNodes(on, "Trigger")[0];
     const kw = trigger === undefined ? undefined : kwOf(trigger);
+
     if (kw === "deadline") {
-      deadline = childTokens(trigger!).find((t) => t.kind === "duration")?.text;
+      const text = childTokens(trigger!).find((t) => t.kind === "duration")?.text;
+      deadlineMs = text === undefined ? undefined : parseDuration(text);
       continue;
     }
     if (kw === "complete" || kw === "reject" || kw === "abandon") {
@@ -682,7 +789,7 @@ function lowerSaga(
     ...(start !== undefined ? { start } : {}),
     state,
     steps,
-    ...(deadline !== undefined ? { deadline } : {}),
+    ...(deadlineMs === undefined ? {} : { deadlineMs }),
     terminals,
   };
 }

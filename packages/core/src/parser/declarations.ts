@@ -281,6 +281,10 @@ function assignBody(c: Cursor): CstNode {
       const parts: CstChild[] = [path(x), x.expectPunct("=")];
       if (x.atKeyword("absent")) parts.push(x.advance());
       else if (x.atKeyword("message", "envelope", "claim")) parts.push(...assignSource(x));
+      else if (x.atKeyword("true", "false")) parts.push(x.advance());
+      // A literal source: `tier = "gold"`. The grammar has always allowed one, and
+      // without this branch `path` is asked to read a string and reports a missing name.
+      else if (x.atKind("string", "int", "decimal")) parts.push(x.advance());
       else parts.push(path(x));
       return node("Assign", parts);
     },

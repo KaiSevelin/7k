@@ -115,6 +115,18 @@ message OrderRejected v1.0 @event {
   detail:  Line60
 }
 
+// Recurring work, driven by the schedule at the end of this file rather than by a
+// request. The business key is the day being settled, which is also what makes a repeated
+// firing idempotent - timer delivery is at-least-once like everything else.
+message SettleDay v1.0 @command {
+  day: date @role(businessKey)
+}
+
+message DaySettled v1.0 @event {
+  day:     date @role(businessKey)
+  charged: Money
+}
+
 message OrderAbandoned v1.0 @event {
   orderId: OrderRef @role(businessKey)
 }
@@ -151,6 +163,7 @@ service Storefront @external {
   // these, `orphan-message` reports four events emitted into nothing - which is
   // exactly the question the analysis exists to ask.
   reacts OrderAccepted  from events { once per orderId; replies none }
+  reacts DaySettled     from events { once per day;     replies none }
   reacts OrderCompleted from events { once per orderId; replies none }
   reacts OrderRejected  from events { once per orderId; replies none }
   reacts OrderAbandoned from events { once per orderId; replies none }
@@ -178,6 +191,24 @@ service OrderService {
   reacts CardRefunded     from events { replies none }
   reacts ShipmentBooked   from events { replies none }
   reacts ShipmentRejected from events { replies none }
+}
+
+// Owns the nightly close. It exists as its own service because the schedule's `send` is
+// routed by the hosting service's `emits`, so whoever holds the recurring work holds the
+// routing for it too.
+service SettlementService {
+  emits SettleDay  to commands
+  emits DaySettled to events
+
+  reacts SettleDay from commands {
+    // The day is the business key, so a timer that fires twice settles once.
+    once per day
+    replies DaySettled
+    // A generous backoff, because a close must not be abandoned - and long enough that a
+    // stuck one is still retrying when tomorrow's is due, which is what makes the
+    // no-overlap rule and `onMissed` observable rather than theoretical.
+    retry   4 after 6h max 12h
+  }
 }
 
 service PaymentService {
@@ -255,6 +286,26 @@ saga Checkout v1.0 {
   on complete send OrderCompleted
   on reject   send OrderRejected
   on abandon  send OrderAbandoned
+}
+
+// ---------------------------------------------------------------------------
+// Recurring work. Both clauses that look optional are required, and for the same
+// reason: each has two wrong answers and no safe default.
+//
+//   the timezone  a local-time schedule across a daylight-saving change either
+//                 fires twice or not at all. "02:00 somewhere" is not a time.
+//   onMissed      after an outage, `skip` loses the settlements and `all` would
+//                 be catastrophic for a notification. Settlement wants them all.
+//
+// A schedule never overlaps itself: one occurrence is in flight at a time, and one
+// that comes due while the last is still running is reported as schedule-overrun -
+// which is when onMissed has something to decide.
+// ---------------------------------------------------------------------------
+
+schedule NightlySettlement {
+  every    "0 2 * * *" in "Europe/Stockholm"
+  send     SettleDay
+  onMissed all
 }
 
 // No strategy clause. Orchestrated versus choreographed is an implementation's

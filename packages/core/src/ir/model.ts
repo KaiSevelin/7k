@@ -223,11 +223,59 @@ export interface ServiceIr extends DeclBase {
   readonly reacts: readonly ReactIr[];
 }
 
+/**
+ * `chargeId = message.chargeId` — an assignment in a `start` block or an `on` action.
+ *
+ * State is assigned only from a received message (D16), which is what lets the checker
+ * prove a field is set before an `undo` reads it, and what keeps the Process layer from
+ * becoming a programming language: there is no arithmetic and no call, only a copy.
+ */
+export interface AssignIr {
+  /** A path into the saga's declared `state`. */
+  readonly target: readonly string[];
+  readonly source: AssignSource;
+  readonly span: Span;
+}
+
+export type AssignSource =
+  | { readonly from: "message" | "envelope" | "claim"; readonly path: readonly string[] }
+  /** `note = absent` — clears the field, since there is no null in 7K. */
+  | { readonly from: "absent" }
+  | { readonly from: "literal"; readonly value: string | number | boolean };
+
+/**
+ * What an `on` clause does. The layer's only idiom is `on <trigger> <action>`, and an
+ * absent action means "continue to the next step" — which is why `continue` carries the
+ * assignments rather than being a separate case.
+ */
+export type SagaAction =
+  | { readonly a: "continue"; readonly assigns: readonly AssignIr[] }
+  | { readonly a: "reject"; readonly reason?: string }
+  | { readonly a: "abandon" };
+
+export interface AwaitIr {
+  readonly message: Ref;
+  /** Overrides correlating on the awaited message's own `@role(businessKey)` (1.1). */
+  readonly keyedBy?: string;
+  readonly action: SagaAction;
+  readonly span: Span;
+}
+
+/** `on timeout 30s reject "payment timed out"`. */
+export interface TimeoutIr {
+  readonly afterMs: number;
+  readonly action: SagaAction;
+  readonly span: Span;
+}
+
+export type Terminal = "complete" | "reject" | "abandon";
+
 export interface StepIr {
   readonly name: string;
   readonly send?: Ref;
-  readonly awaits: readonly { readonly message: Ref; readonly keyedBy?: string; readonly span: Span }[];
-  readonly timeout?: string;
+  readonly awaits: readonly AwaitIr[];
+  /** Absent means the step is bounded only by the saga's deadline (`unbounded-step`). */
+  readonly timeout?: TimeoutIr;
   /** Present with a message, present-and-null for `undo none`, absent otherwise. */
   readonly undo: Ref | null | undefined;
   readonly span: Span;
@@ -236,11 +284,17 @@ export interface StepIr {
 export interface SagaIr extends DeclBase {
   readonly kind: "saga";
   readonly version?: string;
-  readonly start?: { readonly message: Ref; readonly keyedBy?: string };
+  readonly start?: {
+    readonly message: Ref;
+    /** Defaults to the start message's `@role(businessKey)` field (1.1). */
+    readonly keyedBy?: string;
+    readonly assigns: readonly AssignIr[];
+  };
   readonly state: readonly FieldIr[];
   readonly steps: readonly StepIr[];
-  readonly deadline?: string;
-  readonly terminals: readonly { readonly on: string; readonly send: Ref }[];
+  /** Milliseconds. Absent means the saga is bounded only by its steps' timeouts. */
+  readonly deadlineMs?: number;
+  readonly terminals: readonly { readonly on: Terminal; readonly send: Ref }[];
 }
 
 export interface ScheduleIr extends DeclBase {

@@ -166,7 +166,11 @@ function expectStmt(c: Cursor): CstNode {
     parts.push(c.advance(), qname(c));
     if (c.atPunct("[")) parts.push(c.advance(), c.eatKind("string") ?? c.missing("an instance key"), c.expectPunct("]"));
     if (c.atPunct(".")) parts.push(c.advance(), c.expectName("a property"));
-    if (c.atPunct("==")) parts.push(c.advance(), c.expectName("a state"));
+    if (c.atPunct("==")) {
+      // A state name, or a literal: `.state == reject` and `.amount == 77` are both
+      // assertions about a property, and the grammar has always advertised `.<property>`.
+      parts.push(c.advance(), c.eatKind("string", "int", "decimal") ?? c.expectName("a state"));
+    }
     // `expect saga Checkout count 1` — live instances, not messages.
     const sagaCount = c.eatKeyword("count");
     if (sagaCount !== undefined) parts.push(sagaCount, c.eatKind("int") ?? c.missing("a count"));

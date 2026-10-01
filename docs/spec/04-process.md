@@ -78,6 +78,24 @@ rather than creating a second.
 
 The optional block seeds `state` from the start message. Assignments read `message.<path>` and nothing else.
 
+#### Who runs an instance
+
+A saga is hosted by the service in its package that **consumes its start message**, and it
+observes what that service handled rather than subscribing in its own right. Nothing
+declares the relationship; there is only one service it could be.
+
+That is not an implementation detail, because it explains two things the Contract and
+Topology layers would otherwise look odd about. A hosting service's `reacts` list includes
+messages its own handlers do nothing with — `reacts CardCharged from events { replies none }`
+exists so the saga can see it — and its `emits` list includes messages its handlers never
+send, for the same reason routing stays in one table (1.5).
+
+It is also the only arrangement that is safe. A saga with its own subscription would
+*compete* with the service for each message on a queue (`03-topology.md` 2.6), so it would
+steal about half of its own start messages, intermittently, with nothing to report. As a
+consequence a saga inherits the subscription's deduplication, authorization and retry
+behaviour, rather than needing its own answer to each.
+
 #### Correlating a reply to an instance
 
 A step's `on CardCharged` has to find the instance that is waiting. The rule reuses machinery that already
@@ -139,6 +157,14 @@ A step sends one message and waits. Every possible outcome is an `on`:
 | `reject "<reason>"` | terminate as rejected, running `undo` in reverse |
 | `abandon` | terminate as abandoned, running `undo` in reverse |
 
+**A step names the message it sends and not its contents.** There is no payload syntax
+here, so what a `send` carries is derived: the message's `@role(businessKey)` field takes
+the instance key — which is what makes the reply correlate back — and any other field takes
+a `state` field of the same name. A runtime must say which fields it had to supply itself,
+because a quietly invented payment amount is worse than a noisy one. Where a name does not
+line up, as `ChargeCard.amount` does not with `Checkout`'s `total`, there is currently no
+way to say so; see the open question in `../decisions.md`.
+
 **A step's `on` clauses must cover the outcome space** of whichever handler answers it. If
 `PaymentService` declares `replies CardCharged | CardDeclined`, a step omitting either is reported as
 `unhandled-outcome`. That is what `replies` (`03-topology.md` section 2.1) exists for, and it is why a step
@@ -188,6 +214,11 @@ reverse a step that a transactional one does; and the inverse often needs **stat
 Compensation messages are ordinary commands and carry the saga's envelope forward, so a refund is traceable
 to the order that caused it.
 
+**A compensation is not awaited.** Nothing declares an outcome for one — there is no `on`
+clause for an `undo with` — so the inverses go out in reverse order and the saga reaches its
+terminal state. A sub-process whose reversal must be waited for is a step, not a
+compensation.
+
 ### 1.5 Terminal states and deadlines
 
 | State | Reached by |
@@ -207,6 +238,11 @@ on abandon  send OrderAbandoned
 A terminal `send` uses the hosting service's `emits` routing (`03-topology.md` section 2). The service's
 `emits` list therefore includes messages its handlers never personally send, which is deliberate: routing
 stays in one table rather than being split between a service and a saga.
+
+These three names, and the step names, are also what an instance's observable state *is*: a
+running instance is in the step it is waiting in, and a finished one is its terminal state.
+A scenario asserting `expect saga Checkout["ORD-1041"].state == complete` is therefore using
+vocabulary the model already declares rather than any of its own (`30-scenarios.md` 5).
 
 **Every path must reach a terminal state.** Core reports `saga-liveness` where one cannot — a step with no
 timeout and no deadline above it, or an `on` clause that falls through with no following step.
@@ -321,6 +357,14 @@ schedule NightlySettlement {
 **The timezone is required** because a local-time schedule across a daylight-saving transition either fires
 twice or not at all, and that is a decision, never a default.
 
+7K requires the zone; it does not say how to resolve the two hard instants, so a runtime
+must, and must say which it chose. Both failures are real — firing twice double-settles a
+ledger, firing not at all loses a day — so the only safe pair of answers is **never twice
+and never skipped**: a local time the clock jumped over fires at the end of the gap, and one
+the clock repeated fires once. For an hourly schedule the skipped hour then coincides with
+the next occurrence and the two are one firing, which is right: that hour did not happen, so
+it holds no work.
+
 **`onMissed` is required** because no safe default exists (`03-topology.md` section 1.2 — some options are
 *required* precisely because both wrong answers are bad):
 
@@ -332,6 +376,17 @@ twice or not at all, and that is a decision, never a default.
 
 A schedule **never overlaps itself**: one occurrence is in flight at a time, and an occurrence still running
 when the next is due is reported as `schedule-overrun`.
+
+An occurrence is in flight from publication until its message is **handled, dead-lettered or
+dropped** — the only definition available from outside a service, which is as it should be
+(`03-topology.md` 2.0). A dead-lettered occurrence frees the schedule as surely as a
+successful one, since nothing more will happen to it either.
+
+That rule is also where `onMissed` applies without an outage: an occurrence missed because
+the last one was still retrying is a missed occurrence, so a simulation can exercise all
+three policies without any way to fake downtime. Note that it takes a generous retry policy
+to reach — with the default three retries a failing daily job finishes in seven seconds and
+can never overrun its own schedule.
 
 ## 3. Scenarios are a sibling specification
 

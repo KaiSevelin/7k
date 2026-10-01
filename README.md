@@ -262,6 +262,11 @@ saga Checkout v1.0 {
 by sending its start message and handling its terminal messages. State is assigned only from received
 messages, so the checker can prove a field is set before an `undo` reads it.
 
+A saga is hosted by the service in its package that consumes its start message, and it observes what that
+service handled rather than subscribing itself — which is why a hosting service's `reacts` list includes
+messages its own handlers do nothing with, and its `emits` list includes the saga's sends. An instance's
+observable state is the step it is waiting in, or the terminal state it reached.
+
 ## Schedules
 
 ```7k
@@ -273,7 +278,8 @@ schedule NightlySettlement {
 ```
 
 No safe default exists for `onMissed`: after a thirty-hour outage, `all` is right for settlement and
-catastrophic for notifications.
+catastrophic for notifications. A schedule never overlaps itself, so an occurrence that comes due while the
+last one is still retrying is missed too — which is where `onMissed` applies without any outage at all.
 
 ## Predicates
 
@@ -313,7 +319,7 @@ scenario CardDeclinedRefundsNothing {
     { orderId: "ORD-1042", total: { amount: "99.00", currency: "SEK" } }
 
   advance 1s
-  expect saga Checkout["ORD-1042"].state == Rejected
+  expect saga Checkout["ORD-1042"].state == reject
   expect no RefundCard on commands      // compensation must not run for a step that failed
 }
 ```
@@ -321,7 +327,7 @@ scenario CardDeclinedRefundsNothing {
 | Outcomes | `reply M { }` · `reply M after <d>` · `reply none` · `fail` · `hang` · `reply M then fail` |
 |---|---|
 | Selection | `when <predicate>` / `otherwise` · `sequence { }` · `85%` |
-| Driving | `seed` · `at <d> publish` · `advance <d>` · `every <d> for <d>` in a `soak` |
+| Driving | `seed` · `at <d> publish` · `advance <d>` · `every <d> for <d>` in a `soak`. A `schedule` needs no publish: `advance 3d` is three nightly closes |
 | Sending | `as <Service>` · `with claims { }` · `with envelope { }` · `unchecked` |
 | Assertions | `expect [no] M on <pipe> [count n]` · `exactly { }` · `handled` · `rejected ... reason` · `saga X["k"].state ==` · `no stuck saga` |
 
@@ -331,7 +337,7 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 331 tests
+npm test            # 336 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 
@@ -347,8 +353,9 @@ without the specification, the reference above and the examples all following.
 **Running scenarios.** The sandbox lives in its own repository:
 [KaiSevelin/7k-sandbox](https://github.com/KaiSevelin/7k-sandbox). It runs a scenario file against a model
 on a virtual clock, so `advance 30d` finishes in microseconds, and a seed makes a failure a model plus a
-number. A service can be run live rather than mocked with `--live <Service>`, so the same scenario checks
-the same claim at three fidelities.
+number. All three layers run: pipes and their delivery guarantees, sagas with their timeouts, deadlines
+and compensation, and schedules on an anchored civil calendar. A service can be run live rather than
+mocked with `--live <Service>`, so the same scenario checks the same claim at three fidelities.
 
 **Editing `.7k` files.** The VS Code extension lives in its own repository:
 [KaiSevelin/7k-vscode](https://github.com/KaiSevelin/7k-vscode). It gives highlighting, diagnostics

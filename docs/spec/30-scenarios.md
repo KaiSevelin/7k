@@ -199,7 +199,8 @@ split as the message composer.
 | `expect <Service> handled <Message> count <n>` | survived the consumer's `once per` deduplication |
 | `expect rejected <Message> at <Service> reason <r>` | a rejection, not a retry |
 | `expect saga <Saga>["<key>"].state == <state>` | instance state at this point on the clock |
-| `expect saga <Saga> count <n>` | exactly `n` live instances — how a duplicate start is proved not to have created two |
+| `expect saga <Saga>["<key>"].<field> == <value>` | a declared `state` field, so what the saga recorded is checkable too |
+| `expect saga <Saga> count <n>` | exactly `n` instances — how a duplicate start is proved not to have created two |
 | `expect no stuck saga <Saga>` | no instance is past a deadline without terminating |
 
 **Counts are cumulative over the whole run**, not "since the previous expect". Order-relative counting is
@@ -208,6 +209,18 @@ fragile and makes a scenario's meaning depend on where its assertions happen to 
 **Partial matching is the default** because asserting every field makes a scenario brittle to additive
 changes, which are explicitly non-breaking (`02-contract.md` section 5.2). `exactly` is there for when you
 mean to assert that nothing else changed.
+
+**`.state` is a name the model already declares**: the step the instance is waiting in, or
+the terminal state it reached — `charge`, or `complete`, `reject`, `abandon`
+(`04-process.md` 1.5). An assertion therefore needs no vocabulary of its own, and a value
+that is not one of those names is a typo rather than a state nobody implemented yet.
+
+**`count` counts instances, not live ones.** The point of the assertion is that a duplicate
+start did not create a second instance, and counting only live ones answers that differently
+depending on whether the saga happened to finish first — so an assertion about duplication
+would silently become one about duration. `expect no stuck saga` is the separate question
+about liveness: an instance waiting with neither a step timeout nor a deadline above it, or
+one still running past a deadline that should have ended it.
 
 The pair that makes a saga trustworthy is `expect no <CompensatingCommand>` alongside its opposite:
 compensation must run for a step that completed and must **not** run for one that did not

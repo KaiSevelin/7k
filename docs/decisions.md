@@ -1837,6 +1837,166 @@ lowered it too late.**
 
 ---
 
+## D74 — A saga observes its hosting service; it is not a subscriber
+
+A saga has no subscription of its own. The hosting service consumes the start message and
+the awaited replies, and the saga reacts to what that service **handled**.
+
+**Why:** the alternative is a second subscription on the same pipe, and on a queue two
+subscriptions *compete* for each message (`03-topology.md` 2.6). A saga driven that way
+would steal roughly half its own start messages, and nothing would report it — the model
+is legal, the trace looks plausible, and the failure is intermittent. That is the worst
+shape a defect can have.
+
+Observing instead gets three things for free that would otherwise need deciding twice: the
+saga inherits the subscription's deduplication, its authorization, and its retry
+behaviour. It also explains why a hosting service's `reacts` list includes messages its
+handlers do nothing with — `reacts CardCharged from events { replies none }` exists so the
+saga can see it, which is the same reasoning as a service's `emits` list including the
+saga's sends (`04-process.md` 1.5).
+
+The hosting service is the one in the saga's package that consumes its start message.
+Nothing declares the relationship, and nothing needs to: there is only one service that
+could be it.
+
+---
+
+## D75 — A service hosting a saga needs no mock
+
+An unmocked subscription whose message starts a saga the service hosts is answered by the
+saga, replying with its single declared alternative.
+
+**Why:** D71 says an unscripted service that owes a reply hangs, because it cannot be
+assumed to behave. A service hosting a saga is the exception, because the saga *is* its
+behaviour — it is implemented, in the model, right there. Without this the first thing
+every saga scenario must do is mock the one service it is testing, and `shop.scenario.7k`
+could not start `Checkout` at all: `OrderService` declares `replies OrderAccepted`, so it
+hung, and every assertion in five scenarios failed for that reason.
+
+Several declared alternatives and the saga cannot choose, so it hangs and says so. One
+alternative is unambiguous, and `OrderAccepted` is exactly what "the process began" means.
+
+---
+
+## D76 — A saga sends under no identity, and fills its payload from its state
+
+A saga's messages carry the instance's envelope and **no claims**. Their bodies are built
+from the instance: the message's `@role(businessKey)` field takes the instance key, any
+other field takes a state field of the same name, and whatever is left is generated — with
+the runtime naming each field it had to invent.
+
+**Why, for the identity half:** a saga acts under the hosting service's identity and the
+original subject travels as envelope data rather than as a credential (`04-process.md`
+1.8). Forwarding the caller's claims would present as authority something that is audit
+data, and it fails immediately in practice: `PaymentService` requires
+`claim.scope contains "payments.charge"`, which an order-placing customer does not hold, so
+every charge was rejected and dead-lettered. The sandbox has no credential for a service
+because 7K declares none, so it presents none — and by D69 a sender that models no identity
+is not evaluated against `requires`.
+
+**Why, for the payload half:** there is no syntax for a `send` payload. `send ChargeCard`
+names a message and nothing else, so the body has to come from somewhere. The business-key
+rule is the important one: it is what makes the eventual reply correlate back to this
+instance, so correlation works end to end without a correlation mechanism.
+
+The remainder is a real gap, not a solved problem. `ChargeCard.amount` cannot be filled
+from `Checkout`'s state because the state field is called `total`, so the sandbox generates
+a payment amount. It says so, every time, because a quietly fabricated amount is worse than
+a noisy one — but the honest summary is that the Process layer can name a message to send
+and cannot yet say what to put in it.
+
+---
+
+## D77 — `.state` is a step name or a terminal name, and `count` counts instances
+
+`expect saga X["k"].state == <name>` compares against the step the instance is waiting in,
+or the terminal state it reached. Any other property reads a declared `state` field.
+`expect saga X count n` counts instances whatever their status.
+
+**Why, for `.state`:** the examples invented `Completed`, `Rejected` and `Charging`, none
+of which appear anywhere in the language. The terminal states are already named
+`complete`, `reject` and `abandon` — they are `on` triggers — and the steps are already
+named `charge` and `ship`. Using those is one vocabulary instead of two, and an assertion
+then needs no words of its own.
+
+**Why, for `count`:** the specification said "live instances" and gave the rationale "how
+a duplicate start is proved not to have created two". Those conflict the moment a saga
+finishes quickly: `DuplicatePlaceOrder` completes inside its `advance 2s`, so the live
+count is zero and the assertion proves nothing about duplication. Counting instances serves
+the stated purpose in every case, and `expect no stuck saga` is the separate question about
+liveness.
+
+---
+
+## D78 — The Process layer runs only for packages the scenario can see
+
+A saga or a schedule is run when it is declared in the scenario's package or in one the
+package imports.
+
+**Why:** found by accident and worth keeping. `soldout.scenario.7k` references
+`acme.retail.sales`, and the workspace also contains `acme.shop` with a nightly schedule.
+Every sales scenario was firing shop's settlement job, which held an occurrence in flight
+across a six-hour backoff, which kept the run settling for thirty days. A soak that took an
+hour of virtual time reported thirty days.
+
+The rule is the one a scenario already lives by: it sees the declarations of the package it
+references (`30-scenarios.md`). A schedule it cannot name should not be driving its clock.
+A whole-system run is a different thing from a scenario, and if that is ever wanted it
+should be asked for rather than arrived at.
+
+---
+
+## D79 — Silence is not an acknowledgement, and neither is a schedule's overlap a fiction
+
+A schedule never overlaps itself. An occurrence is in flight from publication until its
+message is handled, dead-lettered or dropped, and one that comes due meanwhile is
+**missed** — which is when `onMissed` decides.
+
+**Why:** `onMissed` is required because neither answer is safe, and in a simulation there
+is no outage, so the obvious conclusion is that it can never apply and need not be
+implemented. The specification supplies the case itself: the no-overlap rule (`04-process.md`
+2.2) *creates* missed occurrences without any downtime. So all three policies became
+testable, and the sandbox did not need a way to fake an outage.
+
+"Until handled, dead-lettered or dropped" is the only definition available from outside a
+service, which is as it should be — the model describes interfaces, not internals
+(`03-topology.md` 2.0). A dead-lettered occurrence frees the schedule as surely as a
+successful one: nothing more will happen to it either.
+
+The examples needed a settlement-grade `retry 4 after 6h max 12h` to show this, because
+with the default policy a failing daily job finishes retrying in seven seconds and can
+never overrun. That is itself worth knowing.
+
+---
+
+## D80 — Across a daylight-saving change: never twice, never skipped
+
+A schedule's local time that the clock jumped over fires at the end of the gap. One the
+clock repeated fires once.
+
+**Why:** 7K requires the timezone precisely because a local-time schedule across a
+transition "either fires twice or not at all, and that is a decision, never a default"
+(`04-process.md` 2.2). The language makes the author declare the zone; it does not say how
+to resolve the two hard instants, so a runtime must, and must say which it chose.
+
+Both failure modes are real. Firing twice double-settles a ledger. Firing not at all loses
+a day. Neither is acceptable, so this takes the only pair of answers that avoids both.
+
+One consequence to state plainly: for an hourly schedule the skipped hour's occurrence
+lands on the same instant as the next one and the two are a single firing. A year of
+`0 * * * *` in Stockholm is 8759 firings, not 8760 — and rightly, because that hour did not
+happen and so holds no work.
+
+The implementation is worth a sentence because the naive version is broken in a way that is
+invisible until it is not: resolving a local time by iterating the offset converges, for a
+time inside a spring-forward gap, on an instant *before* the gap. The same local minute is
+then found again on the next search, the schedule stops making progress, and the run arms
+timers in the past until it exhausts the heap. The fix is to take the earliest instant whose
+local time is at or after the one requested, which is an exact match when the time exists
+and the end of the gap when it does not.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.
@@ -1845,6 +2005,14 @@ Two remain. All others are resolved — see the decisions named.
    Reconsider if it sees little use.
 2. **Parameterized values** (`PostCode<SE>`). Deferred as a complexity cliff; the family approach
    (`SwedishPostCode`, `UKPostCode`) is the current answer.
+3. **A payload for `send`** — the Process layer can name the message a step or a schedule sends and
+   cannot say what to put in it. Name-matching against `state` plus the business-key rule covers most
+   of it (D76), but `ChargeCard.amount` from `Checkout`'s `total` needs a word, and a schedule has no
+   state at all, so `SettleDay.day` is the day the occurrence *ran* rather than the day it was *due*.
+   The assignment syntax an `on` action already uses would extend naturally — `send ChargeCard { amount
+   = total }` — and would stay within "assignment, comparison and simple predicates only". Not adopted
+   because it is new language surface and the gap is at least loud: the sandbox names every field it
+   had to invent.
 
 ### Resolved
 

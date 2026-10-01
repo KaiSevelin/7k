@@ -42,7 +42,7 @@ scenario CheckoutSucceeds {
   advance 1s
   expect  ArrangeShipment on commands
   advance 1s
-  expect  saga Checkout["ORD-1041"].state == Completed
+  expect  saga Checkout["ORD-1041"].state == complete
   expect  OrderCompleted  on events
   expect  no message      on commands.dead
 }
@@ -67,7 +67,7 @@ scenario CardDeclinedRefundsNothing {
     { orderId: "ORD-1042", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
 
   advance 1s
-  expect saga Checkout["ORD-1042"].state == Rejected
+  expect saga Checkout["ORD-1042"].state == reject
   expect OrderRejected on events
   expect no RefundCard on commands        // the assertion that matters
 }
@@ -89,7 +89,7 @@ scenario ShipmentRejectedRefundsCharge {
   advance 2s
   expect RefundCard   on commands
   expect CardRefunded on events
-  expect saga Checkout["ORD-1043"].state == Rejected
+  expect saga Checkout["ORD-1043"].state == reject
   expect OrderRejected on events
 }
 
@@ -112,10 +112,10 @@ scenario PaymentNeverAnswers {
     { orderId: "ORD-1044", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
 
   advance 10s
-  expect  saga Checkout["ORD-1044"].state == Charging
+  expect  saga Checkout["ORD-1044"].state == charge
 
   advance 30s                                  // past the step's `timeout 30s`
-  expect  saga Checkout["ORD-1044"].state == Rejected
+  expect  saga Checkout["ORD-1044"].state == reject
   expect  no RefundCard on commands       // again: charge never succeeded
 }
 
@@ -160,4 +160,57 @@ scenario PlaceOrderForSomeoneElse {
   expect  no message on events
   advance 1s
   expect  PlaceOrder on inbound.dead      // a rejection, never retried
+}
+
+// ---------------------------------------------------------------------------
+// 6. Recurring work. The schedule is the only thing driving this one: no message
+//    is published, the clock simply moves.
+//
+//    `advance 3d` is three nightly closes and finishes in microseconds, which is
+//    the whole reason a declared schedule beats a timeout buried in handler code.
+//    Counts are cumulative over the run (D62), so three is three.
+// ---------------------------------------------------------------------------
+
+scenario NightlyCloseRunsEachDay {
+  seed 1
+
+  mock SettlementService {
+    on SettleDay reply DaySettled after 2s
+  }
+
+  advance 3d
+  expect SettleDay  on commands count 3
+  expect DaySettled on events   count 3
+  expect no message on commands.dead
+}
+
+// ---------------------------------------------------------------------------
+// 7. The close is still running when the next one is due.
+//
+//    SettleDay retries `after 6h max 12h`, so three failures put the first
+//    occurrence's last attempt 31 hours out - past the point where the second
+//    night's close comes due. A schedule never overlaps itself, so that
+//    occurrence is missed, and `onMissed all` works through the backlog instead
+//    of discarding it. With `skip` the second night would simply never be settled.
+//
+//    Three closes still happen across three days, which is the assertion: the
+//    backlog drained rather than being lost or doubled.
+// ---------------------------------------------------------------------------
+
+scenario SlowCloseBacksUp {
+  seed 1
+
+  mock SettlementService {
+    on SettleDay sequence {
+      fail
+      fail
+      fail
+      reply DaySettled
+    }
+  }
+
+  advance 3d
+  expect SettleDay  on commands count 3   // one of the three is the catch-up
+  expect DaySettled on events   count 3   // nothing was lost
+  expect no message on commands.dead      // and nothing was abandoned
 }

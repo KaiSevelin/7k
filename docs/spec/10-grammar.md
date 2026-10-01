@@ -304,20 +304,20 @@ Backoff is exponential by default; `linear` is the only override, so the common 
 sagaDecl     = anns "saga" ident version body( sagaItem ) ;
 sagaItem     = startStmt | stateDecl | stepDecl | onTerminal ;
 
-startStmt    = "start" "on" qname "keyed" "by" path [ body( assign ) ] ;
+startStmt    = "start" "on" qname [ "keyed" "by" path ] [ body( assign ) ] ;
 stateDecl    = "state" body( field ) ;
 
 stepDecl     = anns "step" ident body( stepItem ) ;
 stepItem     = "send" qname
              | "on" trigger [ action ]
-             | "undo" "with" qname ;
+             | "undo" ( "with" qname | "none" ) ;
 trigger      = qname | "timeout" durLit ;
 action       = body( assign ) | "reject" strLit | "abandon" ;
 
 onTerminal   = "on" "deadline" durLit "abandon"
              | "on" ( "complete" | "reject" | "abandon" ) "send" qname ;
 
-assign       = path "=" ( scopedPath | literal ) ;
+assign       = path "=" ( scopedPath | literal | "absent" ) ;
 
 scheduleDecl = anns "schedule" ident body( scheduleItem ) ;
 scheduleItem = "every" strLit "in" strLit
@@ -362,7 +362,7 @@ publishStmt  = "publish" msgRef "as" ident [ "unchecked" ]
 expectStmt   = "expect" [ "no" ] msgRef "on" pipeRef [ matcher ] [ "count" intLit ]
              | "expect" ident "handled" msgRef "count" intLit
              | "expect" "rejected" msgRef "at" ident "reason" ident
-             | "expect" "saga" qname "[" strLit "]" "." ident "==" ident
+             | "expect" "saga" qname "[" strLit "]" "." ident "==" ( ident | literal )
              | "expect" "no" "stuck" "saga" qname ;
 matcher      = json | "exactly" json ;
 ```

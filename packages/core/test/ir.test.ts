@@ -338,3 +338,112 @@ describe("the IR is queryable", () => {
     expect(decl<ServiceIr>(w, "S").external).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The saga IR. Every field below was discarded by the lowering until a runtime
+// needed it, which is why these test the shape rather than only the parse.
+// ---------------------------------------------------------------------------
+
+const SAGA_MODEL = `
+package p
+
+message Start v1.0 @command { k: string { length 1..8 } @role(businessKey) }
+message Go    v1.0 @command { k: string { length 1..8 } @role(businessKey) }
+message Ok    v1.0 @event   { k: string { length 1..8 } @role(businessKey) id: uuid }
+message Nope  v1.0 @event   { k: string { length 1..8 } @role(businessKey) }
+message Back  v1.0 @command { k: string { length 1..8 } @role(businessKey) }
+message Won   v1.0 @event   { k: string { length 1..8 } @role(businessKey) }
+message Lost  v1.0 @event   { k: string { length 1..8 } @role(businessKey) }
+
+pipe q : queue
+pipe e : topic
+
+service S {
+  emits Go   to q
+  emits Back to q
+  emits Won  to e
+  emits Lost to e
+
+  reacts Start from q { replies none }
+  reacts Ok    from e { replies none }
+  reacts Nope  from e { replies none }
+}
+
+saga G v1.0 {
+  start on Start keyed by k {
+    note = "seeded"
+  }
+
+  state {
+    note: string { length 1..8 }
+    id:   uuid
+  }
+
+  step one {
+    send Go
+    on Ok   { id = message.id }
+    on Nope reject "declined"
+    on timeout 30s reject "too slow"
+    undo with Back
+  }
+
+  step two {
+    send Go
+    on Ok
+    on timeout 2m abandon
+    undo none
+  }
+
+  on deadline 24h abandon
+
+  on complete send Won
+  on reject   send Lost
+}
+`;
+
+function sagaOf(): import("../src/index.js").SagaIr {
+  const w = buildWorkspace([{ path: "m.7k", source: SAGA_MODEL }]);
+  expect(w.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+  const decl = w.model.decls.find((d) => d.kind === "saga");
+  if (decl?.kind !== "saga") throw new Error("expected a saga");
+  return decl;
+}
+
+describe("lowering a saga", () => {
+  it("keeps the start block's assignments", () => {
+    expect(sagaOf().start?.assigns).toEqual([
+      expect.objectContaining({ target: ["note"], source: { from: "literal", value: "seeded" } }),
+    ]);
+  });
+
+  it("keeps each `on` clause's action, including the absent one that means continue", () => {
+    const [one, two] = sagaOf().steps;
+    expect(one?.awaits[0]?.action).toEqual({
+      a: "continue",
+      assigns: [expect.objectContaining({ target: ["id"], source: { from: "message", path: ["id"] } })],
+    });
+    expect(one?.awaits[1]?.action).toEqual({ a: "reject", reason: "declined" });
+    // No action at all: continue to the next step, with nothing recorded.
+    expect(two?.awaits[0]?.action).toEqual({ a: "continue", assigns: [] });
+  });
+
+  it("gives a timeout its duration in milliseconds and its own action", () => {
+    const [one, two] = sagaOf().steps;
+    expect(one?.timeout).toMatchObject({ afterMs: 30_000, action: { a: "reject", reason: "too slow" } });
+    expect(two?.timeout).toMatchObject({ afterMs: 120_000, action: { a: "abandon" } });
+  });
+
+  it("distinguishes `undo none` from an absent clause", () => {
+    const steps = sagaOf().steps;
+    expect(steps[0]?.undo).not.toBeNull();
+    expect(steps[0]?.undo).toBeDefined();
+    // `undo none` is a deliberate statement; absent is `uncompensated`.
+    expect(steps[1]?.undo).toBeNull();
+  });
+
+  it("gives the deadline in milliseconds and types the terminals", () => {
+    const saga = sagaOf();
+    expect(saga.deadlineMs).toBe(86_400_000);
+    expect(saga.terminals.map((t) => t.on)).toEqual(["complete", "reject"]);
+  });
+});

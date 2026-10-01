@@ -328,7 +328,10 @@ export function lowerScenarioFile(root: CstNode, file: string): {
       const toks = childTokens(n);
       const after = (text: string): string | undefined => {
         const i = toks.findIndex((t) => t.text === text);
-        return i < 0 ? undefined : toks[i + 1]?.text;
+        const tok = i < 0 ? undefined : toks[i + 1];
+        if (tok === undefined) return undefined;
+        // A quoted value is compared by its content, like every other string in 7K.
+        return tok.kind === "string" ? (JSON.parse(tok.text) as string) : tok.text;
       };
       return {
         e: "sagaState",
