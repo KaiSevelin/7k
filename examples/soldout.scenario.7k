@@ -1,0 +1,209 @@
+// Scenarios and mocks for acme.retail.ticketing. See ../docs/spec/04-process.md
+// section 3; payloads are canonical JSON (../docs/spec/01-kernel.md section 7).
+
+scenarios for acme.retail.ticketing
+
+// ---------------------------------------------------------------------------
+// A shared default mockset. Scenarios inherit it and override what they care
+// about, so each scenario stays about the one thing it is testing.
+// ---------------------------------------------------------------------------
+
+mockset Baseline {
+  mock TicketService {
+    on ReserveSeats reply SeatsReserved {
+                         heldUntil: { $now: "+15m" }
+                       } after 150ms
+    on ReleaseSeats reply none after 50ms
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 1. Conditional outcome: a large booking is rejected.
+// ---------------------------------------------------------------------------
+
+scenario SeatsSoldOut {
+  seed 42
+  use  Baseline
+
+  mock TicketService {
+    on ReserveSeats {
+      when message.seats.size > 4 reply SeatsRejected {
+                                       reason: "SoldOut"
+                                     } after 200ms
+      otherwise reply SeatsReserved {
+                                       heldUntil: { $now: "+15m" }
+                                     } after 200ms
+    }
+  }
+
+  at 0s publish OrderPlaced as WebApp {
+    orderId: "ORD-10432",
+    seats:   { $repeat: 6, of: { event: "EV-1", seat: "$auto", price: { amount: "90.00", currency: "SEK" } } },
+    total:   { amount: "540.00", currency: "SEK" }   // Decimal is a string - D32
+  }
+
+  expect  ReserveSeats  on commands
+  advance 1s
+  expect  SeatsRejected on events { reason: "SoldOut" }
+}
+
+// ---------------------------------------------------------------------------
+// 2. Retry path: the handler fails twice, then succeeds. Exercises the
+//    subscription's `retry 3 after 2s backoff exponential` policy.
+// ---------------------------------------------------------------------------
+
+scenario ReserveRecoversAfterTwoFailures {
+  seed 42
+  use  Baseline
+
+  mock TicketService {
+    on ReserveSeats {
+      sequence {
+        fail
+        fail
+        reply SeatsReserved { heldUntil: { $now: "+15m" } }
+      }
+    }
+  }
+
+  at 0s publish ReserveSeats as OrderService {
+    orderId: "ORD-1",
+    seats:   { $repeat: 2, of: "$auto" }
+  }
+
+  advance 10s                        // 2s + 4s backoff, plus slack
+  expect  SeatsReserved on events
+  expect  no message    on commands.dead
+}
+
+// ---------------------------------------------------------------------------
+// 3. Stuck instance: the handler never responds. Exercises the saga deadline
+//    and proves the compensation path runs.
+// ---------------------------------------------------------------------------
+
+scenario ReserveNeverAnswers {
+  seed 42
+  use  Baseline
+
+  mock TicketService {
+    on ReserveSeats hang
+  }
+
+  at 0s publish OrderPlaced as WebApp {
+    orderId: "ORD-2",
+    seats:   { $repeat: 1, of: "$auto" },
+    total:   { amount: "90.00", currency: "SEK" }
+  }
+
+  advance 30s
+  expect  saga Checkout["ORD-2"].state == Reserving
+
+  advance 24h
+  expect  saga Checkout["ORD-2"].state == Abandoned
+  expect  ReleaseSeats on commands
+}
+
+// ---------------------------------------------------------------------------
+// 4. Duplicate delivery: the handler replies, then fails, so the message is
+//    redelivered. Proves the consumer's idempotency key actually works.
+// ---------------------------------------------------------------------------
+
+scenario ReserveRepliesThenFails {
+  seed 42
+  use  Baseline
+
+  mock TicketService {
+    on ReserveSeats reply SeatsReserved { heldUntil: { $now: "+15m" } } then fail
+  }
+
+  at 0s publish ReserveSeats as OrderService {
+    orderId:       "ORD-3",
+    reservationId: "11111111-1111-1111-1111-111111111111",
+    seats:         { $repeat: 1, of: "$auto" }
+  }
+
+  advance 10s
+  expect  SeatsReserved on events count 2   // the pipe really duplicates
+  expect  OrderService handled SeatsReserved count 1  // idempotency deduplicated it
+}
+
+// ---------------------------------------------------------------------------
+// 5. Authorization: the same message with an insufficient claim set.
+// ---------------------------------------------------------------------------
+
+scenario ReserveWithoutScope {
+  seed 42
+  use  Baseline
+
+  at 0s publish ReserveSeats as OrderService
+    with claims { tid: "acme" }                       // ticketing.write missing
+    { orderId: "ORD-4", seats: { $repeat: 1, of: "$auto" } }
+
+  expect rejected ReserveSeats at TicketService reason unauthorized
+  expect no message on events
+}
+
+// ---------------------------------------------------------------------------
+// 6. Negative test: a payload that violates its own contract, to exercise the
+//    consumer's rejection path rather than its logic.
+// ---------------------------------------------------------------------------
+
+scenario ReserveWithBadPayload {
+  seed 42
+  use  Baseline
+
+  at 0s publish ReserveSeats as OrderService
+    unchecked                                         // bypass composer validation
+    {
+      orderId: { $invalid: "length" },                // exceeds OrderRef length 1..32
+      seats:   { $repeat: 0, of: "$auto" }            // violates size 1..20
+    }
+
+  expect  no message on events
+  advance 1s
+  expect  ReserveSeats on commands.dead
+}
+
+// ---------------------------------------------------------------------------
+// 7. Weighted outcomes, for soak runs. Deterministic under `seed`.
+// ---------------------------------------------------------------------------
+
+scenario CheckoutSoak {
+  seed 7
+
+  mock TicketService {
+    on ReserveSeats {
+      85% reply SeatsReserved { heldUntil: { $now: "+15m" } } after 120ms
+      10% reply SeatsRejected { reason: "SoldOut" }           after 120ms
+       5% fail
+    }
+  }
+
+  every 200ms for 1h publish OrderPlaced as WebApp {
+    orderId: "$auto",
+    seats:   { $repeat: { $range: [1, 4] }, of: "$auto" },
+    total:   "$auto"
+  }
+
+  expect no stuck saga Checkout
+  expect no message on commands.dead
+}
+
+// ---------------------------------------------------------------------------
+// Open points this sketch raises, for the layer-3 spec:
+//
+//   * `expect ... count n` needs a defined window. Probably "since the previous
+//     expect", but an explicit `within <d>` may read better.
+//   * `every ... for ...` makes a scenario a load generator. Useful, but it is
+//     also the point where scenarios stop being regression tests. Possibly a
+//     separate `soak` construct so CI can run one set and not the other.
+//   * `expect` payload matching is partial here (only the fields written). Needs
+//     stating explicitly, plus a form for exact matching.
+//   * `unchecked` marks a deliberately invalid payload. Whether that belongs on
+//     the publish or on the value is undecided; on the publish reads better but
+//     is coarser.
+//   * Payloads use relaxed JSON (unquoted keys, comments, trailing commas) per
+//     D32 section 7.4. Anything Spider writes back will be strict JSON, so
+//     hand-written and tool-written fixtures will not look identical. Acceptable,
+//     but worth confirming before people are surprised by a diff.
+// ---------------------------------------------------------------------------

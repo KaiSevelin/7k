@@ -1,0 +1,25 @@
+# Node / TypeScript
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.eslintcache
+
+# 7K sidecars that are per-developer rather than shared.
+# .7k/views.json is deliberately NOT ignored: named lenses are worth sharing.
+.7k/layout.json
+.7k/forms.json
+
+# Editors and OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and scratch
+*.log
+npm-debug.log*
+.tmp/
+scratch/

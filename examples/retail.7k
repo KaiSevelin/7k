@@ -1,0 +1,28 @@
+// An intermediate package. It declares no messages, pipes or services - it
+// exists to hold rules about its descendants, which is what makes it the
+// subsystem boundary.
+//
+// Declaring an intermediate package is optional. Undeclared, it simply carries
+// no rules.
+
+package acme.retail
+
+// Dependency direction for the whole subsystem, stated once in the one place
+// that can see both sides of every relationship.
+//
+// Rank is declaration order, lowest first. A package may depend within its own
+// tier or on any lower tier, never upward.
+//
+// A package is a place in the name tree; a tier is a rank constraining which way
+// dependencies may point between packages. Not a second hierarchy - a constraint
+// over the one that exists.
+//
+//   acme.retail.sales     -> acme.retail.ticketing   ok   (channel -> domain, downward)
+//   acme.retail.sales     -> acme.retail.common      ok   (channel -> platform, downward)
+//   acme.retail.ticketing -> acme.retail.sales       ERROR tier-violation
+//   acme.retail.common    -> acme.retail.ticketing   ERROR tier-violation
+
+tier platform { acme.retail.common }
+tier domain   { acme.retail.ticketing }
+tier channel  { acme.retail.sales }
+

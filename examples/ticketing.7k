@@ -1,0 +1,166 @@
+// A ticketing subsystem shared by several sales channels. It lives in its own
+// package and is depended upon by them - never a sub-package of any of them.
+//
+// Almost every clause has a default which is the safe choice, so nothing here is
+// written that the checker would have assumed anyway.
+
+package acme.retail.ticketing
+
+import acme.retail.common
+
+envelopes common.Trace, common.Tenancy
+
+// ---------------------------------------------------------------- messages
+//
+// Public unless marked @internal. The qualified name is the wire type, so these
+// are `acme.retail.ticketing.SeatsReserved` and so on.
+
+enum RejectReason {
+  SoldOut
+  AlreadyHeld
+  EventCancelled
+}
+
+message ReserveSeats v1.0 @command {
+  orderId:       common.OrderRef
+  reservationId: uuid @role(businessKey)
+  seats:         [common.Seat] { size 1..20; unique }
+}
+
+message ReleaseSeats v1.0 @command {
+  orderId:       common.OrderRef
+  reservationId: uuid @role(businessKey)
+}
+
+message SeatsReserved v1.0 @event {
+  orderId:       common.OrderRef
+  reservationId: uuid @role(businessKey)
+  heldUntil:     instant
+}
+
+message SeatsRejected v1.0 @event {
+  orderId:       common.OrderRef
+  reservationId: uuid @role(businessKey)
+  reason:        RejectReason
+}
+
+message TicketIssued v1.0 @event {
+  orderId:   common.OrderRef
+  ticketRef: common.TicketRef @role(businessKey)
+  seat:      common.Seat
+}
+
+// Three levels of visibility.
+//
+// Package-private: consuming this from outside acme.retail.ticketing is an error.
+message SeatLedgerAdjusted v1.0 @event @internal {
+  event: common.EventRef
+  delta: int
+}
+
+// Subsystem-visible: any package under acme.retail may consume this, but it is
+// not part of the public contract, so a partner integration never sees it. The
+// scope must be an ancestor of this package.
+message SeatInventoryChanged v1.0 @event @internal(acme.retail) {
+  event:     common.EventRef
+  remaining: int { range 0.. }
+}
+
+message PrintTicket v1.0 @command {
+  ticketRef: common.TicketRef @role(businessKey)
+  seat:      common.Seat
+}
+
+message TicketPrinted v1.0 @event {
+  ticketRef: common.TicketRef @role(businessKey)
+}
+
+message PrintFailed v1.0 @event {
+  ticketRef: common.TicketRef @role(businessKey)
+  detail:    common.Line60
+}
+
+// ---------------------------------------------------------------- pipes
+//
+// Defaults carry most of this: at-least-once, durable, and an implicit
+// `<pipe>.dead` dead-letter queue for each.
+
+pipe commands : queue {
+  ordering  by tenantId
+  retention 7d
+  maxSize   256kb
+  carries   ReserveSeats, ReleaseSeats
+}
+
+pipe events : topic {
+  ordering  by tenantId
+  retention 7d
+}
+
+// Crosses the system boundary: its consumer is @external, so Core marks it a
+// boundary pipe. An implementation maps it onto the vendor's HTTP API; nothing here knows
+// that.
+pipe print : queue {
+  ordering  by tenantId
+  retention 1d
+}
+
+// Fire-and-forget: lossy, non-durable, nothing to dead-letter into. Nothing may
+// depend on this pipe for progress.
+pipe telemetry : topic {
+  delivery at-most-once
+  dlq      none
+}
+
+// ---------------------------------------------------------------- services
+
+service TicketService {
+  emits SeatsReserved        to events
+  emits SeatsRejected        to events
+  emits TicketIssued         to events
+  emits SeatLedgerAdjusted   to events
+  emits SeatInventoryChanged to events
+
+  reacts ReserveSeats from commands {
+    requires claim.tid == envelope.tenantId
+             and claim.scope contains "ticketing.write"
+    replies  SeatsReserved | SeatsRejected
+  }
+
+  reacts ReleaseSeats from commands {
+    requires claim.tid == envelope.tenantId
+    replies  none
+    retry    5 after 1s max 30s
+  }
+
+  // A second, independent subscription to the same pipe: the batch path
+  // reconciles at low priority and must not compete with the live one.
+  reacts ReleaseSeats from commands as reconcile {
+    replies     none
+    concurrency 1
+    retry       0
+  }
+}
+
+service ReceiptService {
+  emits PrintTicket to print
+
+  reacts TicketIssued from events {
+    replies PrintTicket
+  }
+
+  reacts TicketPrinted from events { replies none }
+  reacts PrintFailed   from events { replies none }
+}
+
+// A third-party print API. The system itself is not described - only the
+// connection, because messages cross it. No code is generated for it; an implementation
+// binds print to the vendor's HTTP endpoint.
+service PrintGateway @external {
+  emits TicketPrinted to events
+  emits PrintFailed   to events
+
+  reacts PrintTicket from print {
+    replies TicketPrinted | PrintFailed
+  }
+}

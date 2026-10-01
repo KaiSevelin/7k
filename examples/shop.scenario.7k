@@ -1,0 +1,156 @@
+// Scenarios for acme.shop. A scenario file REFERENCES a package rather than
+// declaring one, because a package is one file and not reopenable (D39).
+// See ../docs/spec/04-process.md section 3.
+
+scenarios for acme.shop
+
+// ---------------------------------------------------------------------------
+// A baseline mockset. Scenarios inherit it and override only what they are
+// testing, so each one stays about a single thing.
+// ---------------------------------------------------------------------------
+
+mockset HappyPath {
+  mock PaymentService {
+    on ChargeCard reply CardCharged { chargeId: "$auto" } after 150ms
+    on RefundCard reply CardRefunded                      after 150ms
+  }
+  mock ShippingService {
+    on ArrangeShipment reply ShipmentBooked { shipment: "$auto" } after 300ms
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 1. The happy path, end to end from the external request.
+// ---------------------------------------------------------------------------
+
+scenario CheckoutSucceeds {
+  seed 1
+  use  HappyPath
+
+  at 0s publish PlaceOrder as Storefront
+    with claims { sub: "CUST-9", scope: "orders.write" }
+    {
+      orderId: "ORD-1041",
+      lines:   { $repeat: 2, of: { sku: "SKU-77", qty: 1, unit: { amount: "49.50", currency: "SEK" } } },
+      total:   { amount: "99.00", currency: "SEK" },
+      card:    "tok_live_x"
+    }
+
+  expect  OrderAccepted   on events
+  expect  ChargeCard      on commands
+  advance 1s
+  expect  ArrangeShipment on commands
+  advance 1s
+  expect  saga Checkout["ORD-1041"].state == Completed
+  expect  OrderCompleted  on events
+  expect  no message      on commands.dead
+}
+
+// ---------------------------------------------------------------------------
+// 2. The pair that makes a saga trustworthy. Compensation must run for a step
+//    that succeeded, and must NOT run for one that did not.
+// ---------------------------------------------------------------------------
+
+// Charge never succeeded, so there is nothing to refund.
+scenario CardDeclinedRefundsNothing {
+  seed 1
+  use  HappyPath
+
+  mock PaymentService {
+    on ChargeCard reply CardDeclined { reason: "InsufficientFunds" } after 200ms
+  }
+
+  at 0s publish PlaceOrder as Storefront
+    with claims { sub: "CUST-9", scope: "orders.write" }
+    { orderId: "ORD-1042", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
+
+  advance 1s
+  expect saga Checkout["ORD-1042"].state == Rejected
+  expect OrderRejected on events
+  expect no RefundCard on commands        // the assertion that matters
+}
+
+// Charge succeeded, shipping did not, so the charge must be refunded.
+scenario ShipmentRejectedRefundsCharge {
+  seed 1
+  use  HappyPath
+
+  mock ShippingService {
+    on ArrangeShipment reply ShipmentRejected { detail: "no courier for region" } after 200ms
+  }
+
+  at 0s publish PlaceOrder as Storefront
+    with claims { sub: "CUST-9", scope: "orders.write" }
+    { orderId: "ORD-1043", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
+
+  advance 2s
+  expect RefundCard   on commands
+  expect CardRefunded on events
+  expect saga Checkout["ORD-1043"].state == Rejected
+  expect OrderRejected on events
+}
+
+// ---------------------------------------------------------------------------
+// 3. Silence. Payment never answers, so the step timeout must fire - the case
+//    that produces permanently stuck orders in real systems.
+// ---------------------------------------------------------------------------
+
+scenario PaymentNeverAnswers {
+  seed 1
+  use  HappyPath
+
+  mock PaymentService {
+    on ChargeCard hang
+  }
+
+  at 0s publish PlaceOrder as Storefront
+    with claims { sub: "CUST-9", scope: "orders.write" }
+    { orderId: "ORD-1044", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
+
+  advance 10s
+  expect  saga Checkout["ORD-1044"].state == Charging
+
+  advance 30s                                  // past the step's `timeout 30s`
+  expect  saga Checkout["ORD-1044"].state == Rejected
+  expect  no RefundCard on commands       // again: charge never succeeded
+}
+
+// ---------------------------------------------------------------------------
+// 4. Duplicate delivery. The pipe is at-least-once, so prove the idempotency key
+//    on orderId actually deduplicates.
+// ---------------------------------------------------------------------------
+
+scenario DuplicatePlaceOrder {
+  seed 1
+  use  HappyPath
+
+  at 0s publish PlaceOrder as Storefront
+    with claims { sub: "CUST-9", scope: "orders.write" }
+    { orderId: "ORD-1045", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
+
+  at 0s publish PlaceOrder as Storefront
+    with claims { sub: "CUST-9", scope: "orders.write" }
+    { orderId: "ORD-1045", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
+
+  advance 2s
+  expect ChargeCard   on commands count 1
+  expect saga Checkout count 1                 // one instance, not two
+}
+
+// ---------------------------------------------------------------------------
+// 5. Authorization, at the boundary.
+// ---------------------------------------------------------------------------
+
+scenario PlaceOrderForSomeoneElse {
+  seed 1
+  use  HappyPath
+
+  at 0s publish PlaceOrder as Storefront
+    with claims { sub: "CUST-1", scope: "orders.write" }     // sub != customerId
+    { orderId: "ORD-1046", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
+
+  expect  rejected PlaceOrder at OrderService reason unauthorized
+  expect  no message on events
+  advance 1s
+  expect  PlaceOrder on inbound.dead      // a rejection, never retried
+}

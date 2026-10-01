@@ -1,0 +1,81 @@
+// Shared vocabulary. Owned by whoever owns this package - a platform team,
+// typically - and imported by everything else.
+//
+// A package is the namespace, the ownership boundary, the import unit and the
+// file. One package per file, declared first, not reopenable.
+
+package acme.retail.common
+
+label pii
+label pci
+
+// ---------------------------------------------------------------- values
+
+value Line         : string { length 1..255; normalize trim, collapseSpace }
+value Line60       : Line   { length 1..60 }
+
+value PostCode     : string { length 4..10; normalize strip(" "), upper }
+value CountryCode  : string { length 2; normalize upper; pattern /^[A-Z]{2}$/ }
+value CurrencyCode : string { length 3; normalize upper }
+
+value OrderRef     : string { length 1..32; example "ORD-10432" }
+value TicketRef    : string { length 1..32 }
+value EventRef     : string { length 1..32 }
+value SeatRef      : string { length 1..16; normalize upper; example "A12" }
+value TenantRef    : string { length 1..32 }
+value UserRef      : string { length 1..64 }
+
+// ---------------------------------------------------------------- enums
+
+enum Channel {
+  Web
+  Kiosk
+  Partner
+}
+
+// ---------------------------------------------------------------- records
+
+record Money {
+  amount:   decimal(18,4) { range 0.. }
+  currency: CurrencyCode
+}
+
+record Address @pii {
+  street:   Line60
+  postCode: PostCode
+  city:     Line60
+  country:  CountryCode
+  region:   Line60?
+}
+
+record Buyer @pii {
+  user:    UserRef
+  billing: Address
+}
+
+record Seat {
+  event: EventRef
+  seat:  SeatRef
+}
+
+record SeatPrice {
+  include Seat
+  price: Money
+}
+
+// ---------------------------------------------------------------- envelopes
+//
+// Declared here, applied by the packages that import them. This package has no
+// messages of its own, so it declares no `envelopes` clause.
+
+envelope Trace {
+  correlationId: uuid @role(correlation)
+  causationId:   uuid @derive(inbound.id) @role(causation)
+}
+
+envelope Tenancy {
+  tenantId: TenantRef @role(partitionKey)
+  actor:    UserRef   @role(subject)
+  channel:  Channel
+}
+

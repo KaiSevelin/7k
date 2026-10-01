@@ -1,0 +1,20 @@
+{
+  "_comment": "Lives at .7k/views.json beside layout.json. Presentation, not language: a saved filter on the diagram. Deleting this file loses saved lenses and nothing else.",
+
+  "WebFlow": {
+    "include": ["package:acme.retail.sales", "package:acme.retail.ticketing"],
+    "exclude": ["service:KioskBridge"]
+  },
+
+  "PiiFlow": {
+    "include": ["label:pii"]
+  },
+
+  "Perimeter": {
+    "include": ["label:external"]
+  },
+
+  "TicketingOps": {
+    "include": ["package:acme.retail.ticketing", "pipe:acme.retail.ticketing.commands.dead"]
+  }
+}
