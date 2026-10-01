@@ -87,13 +87,19 @@ literal      = numLit | strLit | boolLit ;
                                        (* regexLit is deliberately not a literal:
                                           it is legal only as a `pattern` argument *)
 
+newline      = [ CR ] LF ;
 comment      = "//" { char } newline
              | "/*" { char } "*/" ;
 ```
 
-Comments and whitespace are **trivia**: discarded by the checker, retained by the CST and attached to
-the following declaration or the preceding token on the same line. This is what allows a graph edit to
-rewrite one line and leave the rest of the file byte-identical.
+Comments and whitespace are **trivia**: discarded by the checker, retained by the CST and attached to the
+following declaration or the preceding token on the same line. This is what allows a graph edit to rewrite one
+line and leave the rest of the file byte-identical.
+
+**A newline is `LF` or `CRLF`, and the CST preserves whichever appeared.** A parser that normalizes line
+endings cannot satisfy the round-trip requirement (`20-ir.md` section 7.2) on a file written on another
+platform, and a formatter that rewrites them all turns a one-line edit into a whole-file diff. Tools should
+emit the dominant ending of the file they are editing.
 
 ### Separators
 
