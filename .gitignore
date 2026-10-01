@@ -1,27 +1,56 @@
-# Node / TypeScript
+# ---- Node / TypeScript ----
 node_modules/
 dist/
 build/
+out/
 coverage/
+.nyc_output/
 *.tsbuildinfo
 .eslintcache
 
-# 7K sidecars that are per-developer rather than shared.
-# .7k/views.json is deliberately NOT ignored: named lenses are worth sharing.
+# npm / yarn / pnpm debris. package-lock.json IS committed.
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+
+# ---- VS Code extension ----
+*.vsix
+.vscode-test/
+
+# ---- 7K sidecars ----
+# Presentation, not the model (docs/spec/20-ir.md section 6). Layout coordinates
+# and composer hints are per-developer; named lenses are worth sharing, so
+# .7k/views.json is deliberately NOT ignored.
 .7k/layout.json
 .7k/forms.json
 
-# Editors and OS
+# ---- Editors and OS ----
+# .vscode holds the launch and build tasks for the extension, so those are kept.
 .vscode/*
 !.vscode/extensions.json
 !.vscode/launch.json
 !.vscode/tasks.json
 .idea/
+*.swp
+*.swo
+*~
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# Logs and scratch
+# ---- Local and transient ----
+.env
+.env.*
+!.env.example
 *.log
-npm-debug.log*
+.cache/
 .tmp/
+tmp/
 scratch/

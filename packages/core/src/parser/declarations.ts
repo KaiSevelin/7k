@@ -159,7 +159,9 @@ function recordLike(c: Cursor, kind: NodeKind, anns: CstNode[], versioned: boole
     if (v !== undefined) parts.push(v);
   }
   parts.push(...annotations(c));
-  parts.push(body(c, RECORD_ITEMS, "a field, `include` or `invariant`"));
+  // Optional, like every other body: a message whose data is all envelope has no
+  // fields of its own to declare.
+  if (c.atPunct("{")) parts.push(body(c, RECORD_ITEMS, "a field, `include` or `invariant`"));
   return node(kind, parts);
 }
 

@@ -14,9 +14,13 @@ const exampleFiles = readdirSync(EXAMPLES)
   .filter((f) => f.endsWith(".7k"))
   .map((f) => join(EXAMPLES, f));
 
-const specFiles = readdirSync(SPEC)
-  .filter((f) => f.endsWith(".md"))
-  .map((f) => join(SPEC, f));
+const specFiles = [
+  ...readdirSync(SPEC)
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => join(SPEC, f)),
+  // The README carries the syntax reference, so it drifts the same way.
+  join(ROOT, "README.md"),
+];
 
 describe("examples", () => {
   it("there are some", () => {

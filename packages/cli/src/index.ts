@@ -9,7 +9,7 @@
  * itself, by parsing every fenced 7k block in `docs/spec`, so a decision cannot
  * change without the prose and the examples following.
  *
- *   7k check                 examples/ and docs/spec/
+ *   7k check                 examples/, docs/spec/ and README.md
  *   7k check path/to/model   one file or directory
  */
 
@@ -51,7 +51,11 @@ function main(argv: readonly string[]): number {
   }
 
   const targets = args.slice(1).map((p) => resolve(cwd, p));
-  if (targets.length === 0) targets.push(resolve(cwd, "examples"), resolve(cwd, "docs/spec"));
+  if (targets.length === 0) {
+    // The README carries the syntax reference, so its code blocks drift the same
+    // way the specification's would.
+    targets.push(resolve(cwd, "examples"), resolve(cwd, "docs/spec"), resolve(cwd, "README.md"));
+  }
 
   const files: string[] = [];
   for (const t of targets) {

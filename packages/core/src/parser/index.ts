@@ -16,7 +16,7 @@ import { lex } from "../lexer.js";
 import { node, type CstChild, type CstNode } from "../cst.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { Cursor } from "./cursor.js";
-import { annotations, qname } from "./common.js";
+import { annotations, predicate, qname } from "./common.js";
 import { declaration, DECLARATION_KEYWORDS, ITEM_PARSERS } from "./declarations.js";
 import { mockRule, scenarioDeclaration, SCENARIO_ITEMS, SCENARIO_KEYWORDS } from "./scenarios.js";
 
@@ -146,6 +146,9 @@ const FRAGMENT_PARSERS: readonly ((c: Cursor) => CstNode | undefined)[] = [
   mockRule,
   SCENARIO_ITEMS,
   ...ITEM_PARSERS,
+  // Last resort: a bare predicate. A reference illustrating the predicate grammar
+  // should not have to wrap it in a clause to be checkable.
+  (c) => (c.atKeyword("claim", "envelope", "message", "not") ? predicate(c) : undefined),
 ];
 
 function fragmentItem(c: Cursor): CstNode | undefined {
