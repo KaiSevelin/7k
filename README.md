@@ -329,13 +329,15 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 303 tests
+npm test            # 325 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 
-**What `7k check` finds.** Unresolved names, duplicate and case-colliding declarations, packages declared
-twice, dependency cycles between packages, tier violations, leaked `@internal` messages, broken envelope
-chains, orphaned messages, replies with no route, missing deduplication keys.
+**What `7k check` finds.** In a model: unresolved names, duplicate and case-colliding declarations,
+packages declared twice, dependency cycles between packages, tier violations, leaked `@internal` messages,
+broken envelope chains, orphaned messages, replies with no route, missing deduplication keys. In a
+scenario: a mocked reply outside a handler's declared outcome space, a mock for a message the service does
+not consume, load generation outside a `soak`, and weighted outcomes that do not sum to 100%.
 
 It also parses every fenced `7k` block in `docs/spec` **and in this README**, so a decision cannot change
 without the specification, the reference above and the examples all following.

@@ -11,7 +11,17 @@
 import type { Diagnostic } from "./diagnostics.js";
 import { parse, type FileKind } from "./parser/index.js";
 import type { CstNode } from "./cst.js";
-import { analyze, link, lowerFile, type LinkedModel, type LoweredFile, type SourceFile } from "./ir/index.js";
+import {
+  analyze,
+  checkScenarios,
+  link,
+  lowerFile,
+  lowerScenarioFile,
+  type LinkedModel,
+  type LoweredFile,
+  type ScenarioFile,
+  type SourceFile,
+} from "./ir/index.js";
 
 export interface WorkspaceInput {
   readonly path: string;
@@ -22,6 +32,8 @@ export interface WorkspaceInput {
 export interface Workspace {
   readonly model: LinkedModel;
   readonly trees: ReadonlyMap<string, CstNode>;
+  /** Lowered scenario files, by path. Not model IR: they reference a package (D62). */
+  readonly scenarios: readonly ScenarioFile[];
   readonly diagnostics: readonly Diagnostic[];
 }
 
@@ -29,6 +41,7 @@ export function buildWorkspace(inputs: readonly WorkspaceInput[]): Workspace {
   const trees = new Map<string, CstNode>();
   const files: SourceFile[] = [];
   const lowered: LoweredFile[] = [];
+  const scenarios: ScenarioFile[] = [];
   const syntax: Diagnostic[] = [];
 
   for (const input of inputs) {
@@ -39,6 +52,11 @@ export function buildWorkspace(inputs: readonly WorkspaceInput[]): Workspace {
     // Scenario files reference a package rather than declaring in one, so they
     // contribute no declarations to the model (D62).
     const kind = input.kind ?? detect(root);
+    if (kind === "scenarios") {
+      const lowered = lowerScenarioFile(root, input.path);
+      scenarios.push(lowered.scenarios);
+      syntax.push(...lowered.diagnostics);
+    }
     const lf = kind === "scenarios" ? { pkg: undefined, decls: [] } : lowerFile(root, input.path);
     lowered.push(lf);
     files.push({
@@ -55,7 +73,16 @@ export function buildWorkspace(inputs: readonly WorkspaceInput[]): Workspace {
   // of unresolved references would bury the one diagnostic that matters.
   const findings = linkage.some((d) => d.code === "unresolved-reference") ? [] : analyze(model);
 
-  return { model, trees, diagnostics: [...syntax, ...linkage, ...findings] };
+  const scenarioFindings = linkage.some((d) => d.code === "unresolved-reference")
+    ? []
+    : checkScenarios(model, scenarios);
+
+  return {
+    model,
+    trees,
+    scenarios,
+    diagnostics: [...syntax, ...linkage, ...findings, ...scenarioFindings],
+  };
 }
 
 function detect(root: CstNode): FileKind {

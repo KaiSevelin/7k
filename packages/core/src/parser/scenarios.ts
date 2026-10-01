@@ -92,7 +92,8 @@ export function mockRule(c: Cursor): CstNode | undefined {
 }
 
 function mockDecl(c: Cursor): CstNode {
-  const parts: CstChild[] = [c.advance(), c.expectName("a service name"), c.expectPunct("{")];
+  // The service may be imported, so its name is qualified.
+  const parts: CstChild[] = [c.advance(), qname(c), c.expectPunct("{")];
   while (!c.done && !c.atPunct("}")) {
     const semi = c.eatPunct(";");
     if (semi !== undefined) {
@@ -114,7 +115,7 @@ function mockDecl(c: Cursor): CstNode {
 function publishStmt(c: Cursor): CstNode {
   const parts: CstChild[] = [c.advance(), msgRef(c)];
   const as = c.eatKeyword("as");
-  if (as !== undefined) parts.push(as, c.expectName("a service name"));
+  if (as !== undefined) parts.push(as, qname(c));
 
   for (;;) {
     const unchecked = c.eatKeyword("unchecked");
@@ -152,7 +153,7 @@ function expectStmt(c: Cursor): CstNode {
   if (c.atKeyword("rejected")) {
     parts.push(c.advance(), msgRef(c));
     const at = c.eatKeyword("at");
-    if (at !== undefined) parts.push(at, c.expectName("a service name"));
+    if (at !== undefined) parts.push(at, qname(c));
     const reason = c.eatKeyword("reason");
     if (reason !== undefined) parts.push(reason, c.expectName("a reason"));
     return node("ExpectStmt", parts);
@@ -169,7 +170,9 @@ function expectStmt(c: Cursor): CstNode {
   }
 
   // `expect [no] message on p`, `expect M on p { } count n`,
-  // `expect Service handled M count n`
+  // `expect Service handled M count n`. The subject may be a service or a message,
+  // and either may be qualified, so it is read the same way and distinguished by
+  // whether `handled` follows.
   parts.push(c.atKeyword("message") ? c.advance() : msgRef(c));
 
   const handled = c.eatKeyword("handled");

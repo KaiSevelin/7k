@@ -67,3 +67,11 @@ export {
   type OutlineEntry,
   type TokenAt,
 } from "./editor.js";
+export {
+  isDirective,
+  jsonValue,
+  parseDuration,
+  parseSize,
+  type Directive,
+  type JsonValue,
+} from "./literals.js";
