@@ -15,6 +15,7 @@
 import { childNodes, childTokens, isNode, isToken, type CstNode } from "../cst.js";
 import type { Diagnostic, Span } from "../diagnostics.js";
 import { jsonValue, parseDuration, type JsonValue } from "../literals.js";
+import { lowerPredicate, type Predicate } from "./predicate.js";
 
 // ---- outcomes ---------------------------------------------------------------
 
@@ -36,7 +37,7 @@ export type Selection =
   | { readonly s: "always"; readonly outcome: Outcome }
   | {
       readonly s: "conditional";
-      readonly cases: readonly { readonly when?: string; readonly outcome: Outcome }[];
+      readonly cases: readonly { readonly when?: Predicate; readonly outcome: Outcome }[];
     }
   /** Advances per call, so "fails twice then succeeds" is expressible. */
   | { readonly s: "sequence"; readonly outcomes: readonly Outcome[] }
@@ -246,7 +247,7 @@ export function lowerScenarioFile(root: CstNode, file: string): {
       cases: selectors.map((s) => {
         const pred = childNodes(s, "Predicate")[0];
         const outcome = outcomeOf(childNodes(s, "Outcome")[0] ?? s);
-        return pred === undefined ? { outcome } : { when: flat(pred).trim(), outcome };
+        return pred === undefined ? { outcome } : { when: lowerPredicate(pred, file), outcome };
       }),
     };
   };

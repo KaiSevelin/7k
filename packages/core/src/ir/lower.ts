@@ -21,6 +21,7 @@ import {
 } from "../cst.js";
 import type { Span } from "../diagnostics.js";
 import type { Token } from "../token.js";
+import { lowerPredicate } from "./predicate.js";
 import {
   type SagaIr,
   type ConstraintIr,
@@ -507,6 +508,8 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
 
   const oncePer = cl.get("once")?.[0];
   const concurrency = cl.get("concurrency")?.[0];
+  const whereClause = cl.get("where")?.[0];
+  const requiresClause = cl.get("requires")?.[0];
 
   return {
     message: ref(ctx, childNodes(n, "MsgRef")[0]) ?? { to: null, text: "", span },
@@ -520,8 +523,12 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
       : clauseKeywords(oncePer).includes("none")
         ? { dedupe: { none: true as const } }
         : { dedupe: { by: joinAll(childNodes(oncePer, "Path")[0] ?? oncePer).trim() } }),
-    where: cl.has("where"),
-    requires: cl.has("requires"),
+    ...(whereClause !== undefined
+      ? { where: lowerPredicate(childNodes(whereClause, "Predicate")[0], ctx.file) }
+      : {}),
+    ...(requiresClause !== undefined
+      ? { requires: lowerPredicate(childNodes(requiresClause, "Predicate")[0], ctx.file) }
+      : {}),
     ...(replies !== undefined ? { replies } : {}),
     ...(concurrency !== undefined ? { concurrency: clauseText(concurrency) } : {}),
     ...(cl.get("retry")?.[0] !== undefined ? { retry: clauseText(cl.get("retry")![0]!) } : {}),

@@ -11,6 +11,7 @@
  */
 
 import type { Span } from "../diagnostics.js";
+import type { Predicate } from "./predicate.js";
 
 export type DeclKind =
   | "label"
@@ -186,8 +187,9 @@ export interface ReactIr {
    * handler is idempotent by construction (D65).
    */
   readonly dedupe?: { readonly by: string } | { readonly none: true };
-  readonly where: boolean;
-  readonly requires: boolean;
+  /** Subscription filter over the envelope only (D56). */
+  readonly where?: Predicate;
+  readonly requires?: Predicate;
   /** Absent means the clause was omitted, which is `incomplete` (D30). */
   readonly replies?: readonly (Ref | "none")[];
   readonly concurrency?: string;

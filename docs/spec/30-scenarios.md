@@ -68,8 +68,28 @@ system.
 ## 4. Mocks
 
 Every service is **mocked** (scripted here) or **live** (a real handler, where an implementation supplies
-one). Mocked is the default, since at design time nothing is implemented. Toggling it per service is how you
-express *"test this one for real, stub its collaborators."*
+one). Mocked is the default, since at design time nothing is implemented.
+
+> **Liveness is chosen by the runner, not written in the scenario.**
+>
+> ```
+> 7k-sandbox run checkout.scenario.7k --live PaymentService
+> ```
+>
+> A scenario is a falsifiable claim about the system (D60); whether `PaymentService` is a real handler is
+> not part of the claim, it is the **fidelity** at which the claim is being checked. Keeping it out of the
+> file means the same scenario runs mocked in CI, with one service live in development, and against a real
+> deployment in the conformance pass — one suite at three fidelities rather than three suites.
+>
+> A live service runs on the same generated scaffolding it runs on in production, with the sandbox merely
+> underneath it as the transport. It receives a validated, normalized, deduplicated message and returns one
+> of its declared `replies`, and cannot tell which transport delivered it. A test that ran the handler
+> through a different code path would not be testing the handler you deploy.
+>
+> **What this cannot virtualize:** a live handler's own I/O. The sandbox has no idea the handler opens a
+> database — that is exactly what "interfaces, not internals" forbids it from knowing — so a real query
+> takes real time and may return different rows. Faking a live handler's dependencies is the author's job;
+> everything *outside* the handler the sandbox gives for free.
 
 ```7k
 mockset HappyPath {

@@ -250,6 +250,10 @@ Every operand names the tier it reads, and each clause may read only what it leg
 `path` permits `[]` as a "for every element" projection — `message.lines[].unit.currency` means the constraint
 holds for every element. There is no indexing by position.
 
+On a list-typed path, **`.size` reads its length** — `message.seats.size > 4`. It is the one accessor a path
+has, and it exists because a filter or an invariant over a collection almost always needs it; adding
+arithmetic to get at it would be a far larger concession.
+
 The bracket form of `claim` handles claim names that are not identifiers, which real tokens frequently use.
 
 ## The Topology layer
