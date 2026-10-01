@@ -334,12 +334,20 @@ schedule NightlySettlement {
 //                      the handler that produces it - CardCharged | CardDeclined
 //                      is exactly PaymentService's declared `replies`, so the
 //                      `charge` step is provably exhaustive.
-//   unhandled-outcome  none. If ShippingService later added a third reply, the
-//                      `ship` step would be flagged until it handled it.
+//   unhandled-outcome  none - and this one is checked, not asserted. Deleting
+//                      `on CardDeclined` reports it, and if ShippingService later
+//                      added a third reply the `ship` step would be flagged until
+//                      it handled it.
+//   state-unset        none - every state field is assigned before it is read. The
+//                      `undo` reads chargeId, which `on CardCharged` recorded; the
+//                      step's own send could not read it, because the send goes out
+//                      before the reply arrives.
 //   liveness           every path terminates: each step has a timeout, and the
 //                      saga has a deadline.
-//   compensation       `charge` is compensated; `ship` is the last step and needs
-//                      none. Nothing is marked undo none.
+//   uncompensated      none - `charge` is compensated, and `ship` is the last step,
+//                      which nothing can unwind. Nothing is marked undo none.
+//   timeout/cycle      none - no saga drives another here, so neither
+//                      timeout-under-deadline nor saga-cycle has anything to say.
 //   orphan-message     none - Storefront observes the four order outcome events,
 //                      which is what removed the warnings this file used to get.
 //   missing-dedupe-key none - every message carries @role(businessKey).

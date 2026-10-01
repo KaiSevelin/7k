@@ -2049,6 +2049,60 @@ amount remains the handler's business.
 
 ---
 
+## D82 — The Process layer's analyses, and what their edges mean
+
+All nine specified saga checks now run. Implementing them forced four readings the
+specification left open, each recorded here because a check that fires where an author
+disagrees is worse than no check.
+
+**`unbounded-step` and `saga-liveness` described the same condition at two severities.**
+`04-process.md` 1.3 said `unbounded-step` is a warning "where a step has neither" a timeout
+nor a deadline; 1.5 said `saga-liveness` is an error for "a step with no timeout and no
+deadline above it". They are split by what actually bounds the wait: a step with no
+`timeout` under a saga that *has* a `deadline` is `unbounded-step`, because the wait does end
+— just by abandoning the whole process rather than failing this step, which is usually not
+what was meant. A step with neither is `saga-liveness`, because nothing ends it. Both codes
+keep their declared severity and now describe different things.
+
+**`saga-liveness` also covers a step with no `on` clause at all.** The specification's other
+clause, "an `on` clause that falls through with no following step", describes something
+legal: the last step continuing *is* `complete`, which is a terminal. The condition that is
+genuinely broken is the opposite — a step nothing can advance. It can only ever be
+abandoned, which is a worse thing than an unbounded wait and is reported first.
+
+**`uncompensated` exempts the last step.** Compensation runs only for a step that
+*completed*, and nothing after the last step exists to trigger its unwinding — not even the
+deadline, since a step in flight has not completed. The example's own comment already said
+`ship` "needs none", and warning about it would have made the check noise in every saga.
+
+**`saga-key-mismatch` compares declared type identity, not shape.** `TicketRef` and
+`OrderRef` may both be a string of 1 to 32 characters, and they identify different things.
+Comparing shape would accept exactly the mistake the check exists for — the specification's
+own example is `TicketIssued` keying on `ticketRef` while the saga keys on `orderId` — so two
+differently-named values are a mismatch, and correlating one against the other has to be
+said with `keyed by`.
+
+**The outcome space includes a child saga's terminals.** For `unhandled-outcome` the space of
+`send M` is every subscription's `replies` for M, unioned with the terminals of any saga M
+starts. That is what makes composition-by-message work without a `call` (1.6): from outside,
+a saga consuming a start message and producing one of its terminals is structurally a handler
+with `replies`, so the check that keeps a step exhaustive has to see it that way too.
+
+Two notes on what this changed elsewhere.
+
+The checker now refuses two models the sandbox's own tests were using to exercise runtime
+behaviour — a send reading state nothing has assigned, and a step nothing can end. Both tests
+keep running, against models they now declare invalid, because a runtime may be handed a model
+it did not check itself and should not fabricate a reading or spin. The runtime's notes and the
+checker's errors say the same thing in two places on purpose; only one of them catches it
+before anything runs.
+
+And `examples/shop.7k` had a comment block claiming these checks passed. It was true by
+inspection and unverified by anything, which is the drift pattern this project keeps finding.
+It is now checked, and the comment says which parts are checked rather than asserted.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.

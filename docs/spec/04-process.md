@@ -116,7 +116,9 @@ on TicketIssued keyed by orderId
 ```
 
 Two checks follow: `saga-key-missing` where an awaited message has no business key and no override, and
-`saga-key-mismatch` where the key's type does not match the saga's.
+`saga-key-mismatch` where the key's type does not match the saga's. The second compares **declared type
+identity**, not shape: `TicketRef` and `OrderRef` may both be a string of 1..32 characters and they
+identify different things, so correlating one against the other needs saying with `keyed by`.
 
 **Correlation is not the correlation id.** `@role(correlation)` groups a whole trace for observability; a
 saga key identifies one instance. One trace may span several saga instances, and one instance may appear in
@@ -183,8 +185,10 @@ business.
 `unhandled-outcome`. That is what `replies` (`03-topology.md` section 2.1) exists for, and it is why a step
 cannot silently hang on a reply nobody thought about.
 
-**Every step needs a `timeout`**, or the saga's `deadline` is its only bound. Core reports `unbounded-step`
-as a warning where a step has neither.
+**Every step needs a `timeout`**, or the saga's `deadline` is its only bound. Core splits that into two,
+by what actually bounds the wait: a step with no `timeout` under a saga that has a `deadline` is
+`unbounded-step`, a warning, because the wait does end — just by abandoning the whole process rather than
+failing this step. A step with neither is `saga-liveness`, an error, because nothing will ever end it.
 
 ### 1.4 Undo
 
@@ -222,7 +226,9 @@ step notify {
 ```
 
 A step with neither `undo with` nor `undo none` is reported as `uncompensated` — a warning, because silence
-there is more often an oversight than a decision.
+there is more often an oversight than a decision. The **last** step is exempt: compensation runs only for a
+step that completed, and nothing after the last step exists to trigger its unwinding, so there is genuinely
+nothing to declare.
 
 **Reversibility is per step, not per command.** The alternative would be to declare an inverse on the command
 itself — `ChargeCard` is reversed by `RefundCard`, always — which would avoid repeating it. Per-step wins for
@@ -273,8 +279,9 @@ running instance is in the step it is waiting in, and a finished one is its term
 A scenario asserting `expect saga Checkout["ORD-1041"].state == complete` is therefore using
 vocabulary the model already declares rather than any of its own (`30-scenarios.md` 5).
 
-**Every path must reach a terminal state.** Core reports `saga-liveness` where one cannot — a step with no
-timeout and no deadline above it, or an `on` clause that falls through with no following step.
+**Every path must reach a terminal state.** Core reports `saga-liveness` where one cannot: a step with no
+timeout and no deadline above it, a step with no `on` clause at all — which nothing can advance, so it can
+only ever be abandoned — or a saga with no steps.
 
 ### 1.6 Composition: sagas drive sagas by message
 
