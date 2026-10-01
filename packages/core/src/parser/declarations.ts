@@ -220,7 +220,12 @@ function pipeDecl(c: Cursor, anns: CstNode[]): CstNode {
 
 const REACT_ATTRS: ClauseTable = {
   accepts: (c, parts) => parts.push(versionRange(c)),
-  once: (c, parts) => parts.push(c.expectKeyword("per"), path(c)),
+  once: (c, parts) => {
+    parts.push(c.expectKeyword("per"));
+    // `once per none` claims the handler is idempotent by construction.
+    if (c.atKeyword("none")) parts.push(c.advance());
+    else parts.push(path(c));
+  },
   where: (c, parts) => parts.push(predicate(c)),
   requires: (c, parts) => parts.push(predicate(c)),
   replies: (c, parts) => {

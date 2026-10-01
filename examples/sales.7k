@@ -53,8 +53,13 @@ service KioskBridge {
 
   // Legal because acme.retail.sales is under acme.retail, which is the scope
   // declared on the message.
+  //
+  // `once per none`: the handler sets a cached availability figure, so replaying
+  // it changes nothing. The message has no business identity either - each
+  // occurrence is genuinely distinct - so there is nothing to key on.
   reacts ticketing.SeatInventoryChanged from ticketing.events {
-    replies none
+    once per none
+    replies  none
   }
 
   // Only this channel's tickets: the broker filters, so other channels'
@@ -81,9 +86,9 @@ service WebApp @external {
 //                      scope.
 //   tier-violation    none - channel depends on domain and platform, both
 //                      downward. See retail.7k for the layer declarations.
-//   orphan-message     SeatLedgerAdjusted - emitted, never consumed.
-//   unexplained-emit   SeatLedgerAdjusted - named in no `replies`, so it is
-//                      either unprompted or an oversight.
+//   orphan-message     SeatLedgerAdjusted, and OrderPlaced - both emitted with
+//                      no modelled consumer. Real, not noise: the analysis is
+//                      asking where these events go.
 //   package-cycle      none - acme.sales depends on acme.ticketing, not back.
 //   unclaimed-role     none - correlation, causation, partitionKey, subject and
 //                      businessKey are all claimed.

@@ -146,6 +146,14 @@ pipe events : topic {
 // messages cross it. An implementation maps `inbound` onto an HTTP ingress.
 service Storefront @external {
   emits PlaceOrder to inbound
+
+  // The app shows order status, so it observes the outcomes it caused. Without
+  // these, `orphan-message` reports four events emitted into nothing - which is
+  // exactly the question the analysis exists to ask.
+  reacts OrderAccepted  from events { once per orderId; replies none }
+  reacts OrderCompleted from events { once per orderId; replies none }
+  reacts OrderRejected  from events { once per orderId; replies none }
+  reacts OrderAbandoned from events { once per orderId; replies none }
 }
 
 // Accepts orders and hosts the Checkout saga.
@@ -267,6 +275,9 @@ saga Checkout v1.0 {
 //                      saga has a deadline.
 //   compensation       `charge` is compensated; `ship` is the last step and needs
 //                      none. Nothing is marked undo none.
+//   orphan-message     none - Storefront observes the four order outcome events,
+//                      which is what removed the warnings this file used to get.
+//   missing-dedupe-key none - every message carries @role(businessKey).
 //   envelope-break     none - Trace and Caller ride on every message, including
 //                      the ones the saga sends.
 //   ordering-defeated  none - every subscription inherits `by customerId`.

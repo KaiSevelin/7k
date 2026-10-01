@@ -1641,6 +1641,67 @@ scenario format. The first three keep implementations interoperable; the fourth 
 
 ---
 
+## D65 — `once per none` declares a naturally idempotent handler
+
+A third form alongside `once per <path>` and the default `@role(businessKey)` field: `once per none` claims
+the handler is idempotent by construction and needs no deduplication store.
+
+**Why it was needed**, and how it was found: the `missing-dedupe-key` analysis, run against the worked
+examples for the first time, rejected `KioskBridge` consuming `SeatInventoryChanged`. The rejection was
+correct and unfixable under the existing rules. That message says *"event EV-1 now has 40 seats
+remaining"* — it has **no business identity**, because each occurrence is genuinely distinct, and the
+handler **sets** a cached figure rather than accumulating, so replaying it changes nothing.
+
+Requiring a key there would have meant either inventing a synthetic id nobody needs, or keying on the
+event and silently dropping later updates. Both are worse than saying what is true.
+
+It uses the `none` idiom already established by `ordering none`, `dlq none`, `replies none` and
+`undo none` (D55, D63).
+
+**It is a declaration, not an exemption.** Omitting the clause entirely is still `missing-dedupe-key`,
+because silence is usually an oversight; `once per none` is a claim the author makes deliberately, and an
+implementation generates no deduplication store for it.
+
+---
+
+## D66 — Name resolution and the IR are implemented, and the examples are now checked
+
+Step 3. `7k check` resolves names across files and runs seven analyses, so the worked examples are
+verified rather than asserted.
+
+**Resolution follows D37 exactly**: the enclosing package, then an imported package by its last segment or
+alias, then nothing. Names fold case and are unique per package across all kinds — one namespace, because
+a pipe named `commands` beside a message named `Commands` would make `emits Commands to commands`
+ambiguous under case-insensitive resolution (D40).
+
+**Seven analyses**: `package-cycle`, `tier-violation`, `internal-leak`, `envelope-break`,
+`orphan-message`, `reply-without-emit`, `missing-dedupe-key`, plus `unresolved-reference`,
+`duplicate-declaration`, `case-collision`, `package-reopened` and `tier-member-outside` from linking.
+
+Analysis is skipped when any reference is unresolved, because a model full of unknown names buries the one
+diagnostic that matters.
+
+**Three bugs in the model's own rules, found by running the analyses over the examples:**
+
+- An `upcast` was being registered under the name of the message it translates, colliding with the
+  message. An upcast introduces no name and nothing refers to it, so it is not a symbol at all.
+- Tier members name *packages*, not declarations, and resolved against the wrong table.
+- Annotation arguments were being assembled without their dots, so `@internal(acme.retail)` produced a
+  scope of `acmeretail` and `@role(businessKey)` matched no role — which silently disabled the
+  deduplication analysis everywhere.
+
+**Two findings in the examples that were real**, and that the examples were changed to answer: the
+`SeatInventoryChanged` consumer needed `once per none` (D65), and `shop.7k` emitted four order-outcome
+events into nothing, so `Storefront` now observes the outcomes it caused. That is what the orphan analysis
+exists to ask.
+
+**The remaining two warnings are deliberate** and are now asserted by a test rather than described in a
+comment: `OrderPlaced` and `SeatLedgerAdjusted` are emitted with no modelled consumer. Listing them
+explicitly rather than snapshotting them means the next person to run the suite cannot silently re-record
+a regression.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.

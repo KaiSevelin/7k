@@ -128,9 +128,9 @@ ceremony.
 This is where the delivery attribute earns its place. It is not documentation; it is checked.
 
 - **`at-least-once` and `effectively-once` both imply the handler must be idempotent.** A consumer needs
-  a deduplication key. It defaults to the message's `@role(businessKey)` field, and
-  `once per <path>` overrides that. Only when **neither** is present is it an error
-  (`missing-dedupe-key`).
+  a deduplication key. It defaults to the message's `@role(businessKey)` field; `once per <path>`
+  overrides that; and a handler idempotent by construction says `once per none` (2.8). Only when **none**
+  of the three is present is it an error (`missing-dedupe-key`).
 - **`at-most-once` implies nothing may depend on it for progress.** A saga step awaiting a message
   that arrives over a lossy pipe is a liveness defect — it will manifest as rare permanently stuck
   instances months after release. Core reports it at build time (`liveness-over-lossy-pipe`).
@@ -178,7 +178,7 @@ service TicketService {
 | `emits M to P` | — | this service publishes `M` on pipe `P`, whether in response to something or not |
 | `reacts M from P` | — | this service **consumes** `M` from pipe `P`. Consuming is not responding; the response, if any, is `replies` |
 | `accepts v<range>` | the current major | version range this handler understands |
-| `once per <path>` | the message's `@role(businessKey)` field | deduplication scope; see 2.8 |
+| `once per <path>` \| `once per none` | the message's `@role(businessKey)` field | deduplication scope, or a claim of natural idempotence; see 2.8 |
 | `where <predicate>` | none | subscription filter; see 2.5 |
 | `requires <predicate>` | none | authorization; see section 3 |
 | `replies A \| B` | unspecified (`incomplete`) | the handler's outcome space; see 2.1 |
@@ -468,6 +468,25 @@ service ReceiptService {
 
 Without the override a three-ticket order sends three receipts; with it, one. That is a business decision
 about deduplication *scope*, which is why it belongs to the consumer rather than to the message.
+
+### Naturally idempotent handlers
+
+Some handlers need no deduplication at all. A handler that *sets* a value — "event `EV-1` now has 40
+seats remaining" — is idempotent by construction, and replaying it is harmless. Some messages have no
+business identity to key on either: each occurrence is genuinely distinct.
+
+Saying so uses the same `none` idiom as `ordering none`, `dlq none`, `replies none` and `undo none`:
+
+```7k
+reacts SeatInventoryChanged from events {
+  once per none        // the handler sets a value; replaying it changes nothing
+  replies  none
+}
+```
+
+That is a **declaration, not an exemption**: omitting the clause entirely on an `at-least-once` pipe is
+still `missing-dedupe-key`, because silence there is usually an oversight. `once per none` is a claim the
+author makes deliberately, and an implementation generates no deduplication store for it.
 
 **One trap 7K cannot catch.** The key must be stable across retries. If a producer generates a fresh `uuid`
 on every send attempt, `@role(businessKey)` on that field is decorative — each retry looks like a new

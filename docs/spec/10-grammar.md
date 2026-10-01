@@ -276,7 +276,9 @@ emitsStmt    = "emits"  msgRef "to"   pipeRef ;
 reactsStmt   = "reacts" msgRef "from" pipeRef [ "as" ident ]
                body( reactAttr ) ;
 reactAttr    = "accepts"     versionRange
-             | "once" "per" path          (* deduplication scope *)
+             | "once" "per" ( path | "none" )
+                                       (* deduplication scope, or a claim of
+                                          natural idempotence *)
              | "where"       predicate
              | "requires"    predicate
              | "replies"     replySpec

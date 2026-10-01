@@ -96,9 +96,13 @@ do Core, Sandbox and Spider.
 
 ```
 npm install
-npm test            # 213 tests
-npm run check       # parses every example and every 7k block in the spec
+npm test            # 252 tests
+npm run check       # parses, resolves and analyses the examples and the spec
 ```
+
+**What `7k check` finds.** Unresolved names, duplicate and case-colliding declarations, packages
+declared twice, dependency cycles between packages, tier violations, leaked `@internal` messages,
+broken envelope chains, orphaned messages, replies with no route, and missing deduplication keys.
 
 **Editing 7K in VS Code.** Open this repo and press F5 to launch an Extension Development Host with
 `examples/` loaded. You get highlighting, syntax diagnostics as you type, and keyword completion
@@ -113,8 +117,8 @@ is stale or if a keyword has no highlighting group. The keyword list has exactly
 |---|---|
 | **1** Lossless lexer, `7k check` over examples and spec code blocks | **done** |
 | **2** Lossless CST and an error-tolerant recursive-descent parser | **done** |
-| **3** Name resolution, IR, and four analyses — `orphan-message`, `envelope-break`, `internal-leak`, `package-cycle` | |
-| **4** Sandbox: virtual clock, quiescence loop, text trace, scenarios running headless | |
+| **3** Name resolution, the IR, and seven analyses | **done** |
+| **4** Sandbox: virtual clock, quiescence loop, text trace, scenarios running headless | next |
 | **5** Spider, read-only: graph, sequence and timeline from a trace file | |
 
 Code generation is deliberately last: it is the thing most likely to reveal the IR is wrong, so the

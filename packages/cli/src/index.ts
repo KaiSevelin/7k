@@ -1,29 +1,29 @@
 #!/usr/bin/env node
 /**
- * `7k check` — parses 7K sources and the specification's own fenced code blocks,
- * and verifies that every tree reproduces its source byte for byte.
+ * `7k check` — parse, resolve and analyse.
  *
- * No name resolution yet, so it checks shape rather than meaning: a reference to
- * a message that does not exist still passes. What it does catch is the
- * specification and the examples drifting apart, which is how every defect found
- * so far arose.
+ * Two jobs, and the second is what justified building this before anything else.
+ * It checks the model: unresolved names, package cycles, tier violations, leaked
+ * internal messages, broken envelope chains, orphaned messages, replies with no
+ * route, missing deduplication keys. And it checks the **specification** against
+ * itself, by parsing every fenced 7k block in `docs/spec`, so a decision cannot
+ * change without the prose and the examples following.
+ *
+ *   7k check                 examples/ and docs/spec/
+ *   7k check path/to/model   one file or directory
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import {
+  buildWorkspace,
   extractSpecBlocks,
   formatDiagnostic,
-  hasErrors,
   parse,
   text,
   type Diagnostic,
+  type WorkspaceInput,
 } from "@sevenk/core";
-
-interface Unit {
-  readonly label: string;
-  readonly source: string;
-}
 
 const cwd = process.cwd();
 const rel = (p: string): string => relative(cwd, p).replaceAll("\\", "/") || p;
@@ -40,17 +40,7 @@ function walk(target: string, out: string[]): void {
   }
 }
 
-function unitsFor(file: string): Unit[] {
-  const source = readFileSync(file, "utf8");
-  if (file.endsWith(".7k")) return [{ label: rel(file), source }];
-  if (file.endsWith(".md")) {
-    return extractSpecBlocks(source, rel(file)).map((b) => ({
-      label: `${b.file}:${b.fenceLine}${b.fragment ? " (fragment)" : ""}`,
-      source: b.text,
-    }));
-  }
-  return [];
-}
+const SEVERITY_RANK = { error: 0, warning: 1, incomplete: 2, info: 3 } as const;
 
 function main(argv: readonly string[]): number {
   const args = argv.filter((a) => !a.startsWith("-"));
@@ -73,31 +63,64 @@ function main(argv: readonly string[]): number {
     }
   }
 
-  const diagnostics: Diagnostic[] = [];
-  const roundTripFailures: string[] = [];
-  let units = 0;
+  // 7K sources form one workspace, so names resolve across files. Specification
+  // blocks are checked individually: most are fragments, and none belongs to a
+  // model.
+  const models: WorkspaceInput[] = [];
+  const fragments: { label: string; source: string }[] = [];
 
   for (const file of files.sort()) {
-    for (const unit of unitsFor(file)) {
-      units++;
-      const { root, diagnostics: ds } = parse(unit.source, unit.label);
-      for (const d of ds) {
-        diagnostics.push(d);
-        process.stderr.write(`${formatDiagnostic(d, unit.source)}\n`);
-      }
-      if (text(root) !== unit.source) roundTripFailures.push(unit.label);
+    const source = readFileSync(file, "utf8");
+    if (file.endsWith(".7k")) {
+      models.push({ path: rel(file), source });
+      continue;
+    }
+    if (!file.endsWith(".md")) continue;
+    for (const b of extractSpecBlocks(source, rel(file))) {
+      fragments.push({
+        label: `${b.file}:${b.fenceLine}${b.fragment ? " (fragment)" : ""}`,
+        source: b.text,
+      });
     }
   }
 
+  const sources = new Map<string, string>(models.map((m) => [m.path, m.source]));
+  const diagnostics: Diagnostic[] = [];
+  const roundTripFailures: string[] = [];
+
+  if (models.length > 0) {
+    const ws = buildWorkspace(models);
+    diagnostics.push(...ws.diagnostics);
+    for (const [path, tree] of ws.trees) {
+      if (text(tree) !== sources.get(path)) roundTripFailures.push(path);
+    }
+  }
+
+  for (const f of fragments) {
+    sources.set(f.label, f.source);
+    const { root, diagnostics: ds } = parse(f.source, f.label);
+    diagnostics.push(...ds.filter((d) => d.severity === "error"));
+    if (text(root) !== f.source) roundTripFailures.push(f.label);
+  }
+
+  const ordered = [...diagnostics].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+  for (const d of ordered) {
+    const out = d.severity === "error" ? process.stderr : process.stdout;
+    out.write(`${formatDiagnostic(d, sources.get(d.span.file) ?? "")}\n`);
+  }
   for (const label of roundTripFailures) {
-    process.stderr.write(`${label}: error lossless-roundtrip: token stream does not reproduce the source\n`);
+    process.stderr.write(`${label}: error lossless-roundtrip: the tree does not reproduce the source\n`);
   }
 
   const errors = diagnostics.filter((d) => d.severity === "error").length + roundTripFailures.length;
-  const summary = `7k check: ${units} unit${units === 1 ? "" : "s"} from ${files.length} file${files.length === 1 ? "" : "s"}, ${errors} error${errors === 1 ? "" : "s"}`;
-  process.stdout.write(`${summary}\n`);
+  const warnings = diagnostics.filter((d) => d.severity === "warning").length;
+  const units = models.length + fragments.length;
 
-  return errors > 0 || hasErrors(diagnostics) ? 1 : 0;
+  process.stdout.write(
+    `7k check: ${units} units from ${files.length} files, ` +
+      `${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"}\n`,
+  );
+  return errors > 0 ? 1 : 0;
 }
 
 process.exit(main(process.argv.slice(2)));

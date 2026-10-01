@@ -53,3 +53,5 @@ export {
   type FileKind,
   type ParseResult,
 } from "./parser/index.js";
+export * from "./ir/index.js";
+export { buildWorkspace, type Workspace, type WorkspaceInput } from "./workspace.js";
