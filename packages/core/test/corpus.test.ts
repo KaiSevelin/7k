@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractSpecBlocks, lex, reconstruct } from "../src/index.js";
+import { extractSpecBlocks, lex, parse, reconstruct, text } from "../src/index.js";
 
 const ROOT = join(import.meta.dirname, "..", "..", "..");
 const EXAMPLES = join(ROOT, "examples");
@@ -35,6 +35,19 @@ describe("examples", () => {
       it("reconstructs byte for byte", () => {
         expect(reconstruct(lex(source, rel(file)).tokens)).toBe(source);
       });
+
+      it("parses with no errors", () => {
+        const { diagnostics } = parse(source, rel(file));
+        expect(
+          diagnostics
+            .filter((d) => d.severity === "error" || d.severity === "incomplete")
+            .map((d) => `${d.severity} ${d.code}: ${d.message}`),
+        ).toEqual([]);
+      });
+
+      it("the tree reproduces the source byte for byte", () => {
+        expect(text(parse(source, rel(file)).root)).toBe(source);
+      });
     });
   }
 });
@@ -61,6 +74,12 @@ describe("spec code blocks", () => {
 
     it(`reconstructs byte for byte: ${label} [${n}]`, () => {
       expect(reconstruct(lex(block.text, block.file).tokens)).toBe(block.text);
+    });
+
+    it(`parses cleanly: ${label} [${n}]`, () => {
+      const { root, diagnostics } = parse(block.text, block.file);
+      expect(diagnostics.filter((d) => d.severity === "error").map((d) => d.code)).toEqual([]);
+      expect(text(root)).toBe(block.text);
     });
   }
 });

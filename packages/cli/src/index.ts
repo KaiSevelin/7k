@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
- * `7k check` — lexes 7K sources and the specification's own fenced code blocks.
+ * `7k check` — parses 7K sources and the specification's own fenced code blocks,
+ * and verifies that every tree reproduces its source byte for byte.
  *
- * Only lexing so far: there is no parser yet. Even so this is the check worth
- * having first, because it is what stops the specification and the examples
- * drifting apart.
+ * No name resolution yet, so it checks shape rather than meaning: a reference to
+ * a message that does not exist still passes. What it does catch is the
+ * specification and the examples drifting apart, which is how every defect found
+ * so far arose.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -13,8 +15,8 @@ import {
   extractSpecBlocks,
   formatDiagnostic,
   hasErrors,
-  lex,
-  reconstruct,
+  parse,
+  text,
   type Diagnostic,
 } from "@sevenk/core";
 
@@ -78,12 +80,12 @@ function main(argv: readonly string[]): number {
   for (const file of files.sort()) {
     for (const unit of unitsFor(file)) {
       units++;
-      const { tokens, diagnostics: ds } = lex(unit.source, unit.label);
+      const { root, diagnostics: ds } = parse(unit.source, unit.label);
       for (const d of ds) {
         diagnostics.push(d);
         process.stderr.write(`${formatDiagnostic(d, unit.source)}\n`);
       }
-      if (reconstruct(tokens) !== unit.source) roundTripFailures.push(unit.label);
+      if (text(root) !== unit.source) roundTripFailures.push(unit.label);
     }
   }
 

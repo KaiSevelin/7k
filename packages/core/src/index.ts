@@ -27,3 +27,29 @@ export {
   type CompletionContextKind,
   type CompletionItem,
 } from "./completion.js";
+export {
+  childNodes,
+  childTokens,
+  descendants,
+  dump,
+  hasErrorNode,
+  isNode,
+  isToken,
+  keywordOf,
+  nameOf,
+  node,
+  text,
+  tokens,
+  type CstChild,
+  type CstNode,
+  type NodeKind,
+} from "./cst.js";
+export {
+  detectKind,
+  parse,
+  parseFile,
+  parseFragment,
+  parseScenarios,
+  type FileKind,
+  type ParseResult,
+} from "./parser/index.js";

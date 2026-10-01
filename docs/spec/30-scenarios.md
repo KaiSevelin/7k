@@ -156,6 +156,7 @@ split as the message composer.
 | `expect <Service> handled <Message> count <n>` | survived the consumer's `once per` deduplication |
 | `expect rejected <Message> at <Service> reason <r>` | a rejection, not a retry |
 | `expect saga <Saga>["<key>"].state == <state>` | instance state at this point on the clock |
+| `expect saga <Saga> count <n>` | exactly `n` live instances — how a duplicate start is proved not to have created two |
 | `expect no stuck saga <Saga>` | no instance is past a deadline without terminating |
 
 **Counts are cumulative over the whole run**, not "since the previous expect". Order-relative counting is

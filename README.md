@@ -96,12 +96,12 @@ do Core, Sandbox and Spider.
 
 ```
 npm install
-npm test            # 134 tests
-npm run check       # lexes every example and every 7k block in the spec
+npm test            # 213 tests
+npm run check       # parses every example and every 7k block in the spec
 ```
 
 **Editing 7K in VS Code.** Open this repo and press F5 to launch an Extension Development Host with
-`examples/` loaded. You get highlighting, lexical diagnostics as you type, and keyword completion
+`examples/` loaded. You get highlighting, syntax diagnostics as you type, and keyword completion
 scoped to the enclosing block — inside a `pipe` body it offers `delivery` and `ordering`, inside a
 `reacts` block it offers `replies` and `once per`. Completion of *your* names needs name resolution,
 which arrives at step 3.
@@ -112,7 +112,7 @@ is stale or if a keyword has no highlighting group. The keyword list has exactly
 | Step | State |
 |---|---|
 | **1** Lossless lexer, `7k check` over examples and spec code blocks | **done** |
-| **2** CST and a recursive-descent parser over the same corpus | next |
+| **2** Lossless CST and an error-tolerant recursive-descent parser | **done** |
 | **3** Name resolution, IR, and four analyses — `orphan-message`, `envelope-break`, `internal-leak`, `package-cycle` | |
 | **4** Sandbox: virtual clock, quiescence loop, text trace, scenarios running headless | |
 | **5** Spider, read-only: graph, sequence and timeline from a trace file | |
@@ -120,7 +120,7 @@ is stale or if a keyword has no highlighting group. The keyword list has exactly
 Code generation is deliberately last: it is the thing most likely to reveal the IR is wrong, so the
 IR should be stable before anything depends on its shape.
 
-**Why the lexer first.** Every defect found while writing the specification was drift between a
-decision and the code blocks illustrating it — nothing caught it, because the spec was prose and the
-examples were decoration. `7k check` now lexes 47 units on every commit, so a decision cannot change
-without the spec and examples following.
+**Why this order.** Every defect found while writing the specification was drift between a decision
+and the code blocks illustrating it — nothing caught it, because the spec was prose and the examples
+were decoration. `7k check` now parses 47 units on every commit, so a decision cannot change without
+the spec and examples following.

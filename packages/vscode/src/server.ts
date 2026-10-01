@@ -4,15 +4,14 @@
  * All the language knowledge lives in Core — this file only translates between
  * Core and LSP, so any other editor gets the same behaviour from the same code.
  *
- * What it can do today, with only a lexer behind it:
- *   - lexical diagnostics as you type
+ * What it can do today:
+ *   - syntax diagnostics as you type, from the parser
  *   - keyword completion, scoped to the enclosing block
  *
  * What it cannot do yet, and why:
  *   - completion of your own names (messages, values, pipes) needs name
  *     resolution, which needs the IR — step 3
  *   - hover, go-to-definition and rename need the same
- *   - accurate context inside a half-written declaration needs the CST — step 2
  */
 
 import {
@@ -27,7 +26,7 @@ import {
   type InitializeResult,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { completionsAt, lex, type Severity } from "@sevenk/core";
+import { completionsAt, parse, type Severity } from "@sevenk/core";
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -54,7 +53,9 @@ connection.onInitialize((): InitializeResult => ({
 
 function publish(doc: TextDocument): void {
   const source = doc.getText();
-  const { diagnostics } = lex(source, doc.uri);
+  // Parse, not just lex: a missing brace or a clause in the wrong body is a
+  // far more useful thing to report than an unterminated string.
+  const { diagnostics } = parse(source, doc.uri);
 
   const out: LspDiagnostic[] = diagnostics.map((d) => ({
     severity: SEVERITY[d.severity],
