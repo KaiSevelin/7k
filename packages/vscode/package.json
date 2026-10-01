@@ -3,6 +3,7 @@
   "displayName": "7K",
   "description": "Syntax highlighting, diagnostics and completion for the 7K modelling language",
   "version": "0.0.1",
+  "license": "Apache-2.0",
   "private": true,
   "type": "commonjs",
   "engines": {
@@ -54,5 +55,9 @@
   },
   "devDependencies": {
     "@types/vscode": "^1.90.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KaiSevelin/7k.git"
   }
 }

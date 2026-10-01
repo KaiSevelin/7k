@@ -391,3 +391,20 @@ should be stable before anything depends on its shape.
 
 **7K is three layers and nothing else.** Code generation, deployment and execution belong to
 implementations outside the language — and so do Core, the sandbox and Spider.
+
+## Licence
+
+[Apache License 2.0](LICENSE). Copyright 2026 Kai Sevelin.
+
+Chosen for the **patent grant**, which matters more for a specification than for a library: the whole
+premise of 7K is that other people write implementations, and an implementer deserves an explicit grant
+rather than silence. It is also what every comparable project uses — OpenAPI, AsyncAPI, CloudEvents and
+Smithy are all Apache 2.0 — so combining 7K with any of them needs no compatibility analysis.
+
+**You may implement 7K, commercially or otherwise, without sharing your implementation.** Providers,
+runtimes and code generators live outside the language by design
+([docs/spec/00-overview.md](docs/spec/00-overview.md)), and the licence is chosen to keep that true in
+practice as well as in principle.
+
+There is deliberately no `NOTICE` file and no per-file licence header: both add obligations that
+redistributors have to carry, and neither is required.

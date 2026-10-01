@@ -1,9 +1,23 @@
 {
   "name": "sevenk",
+  "description": "A descriptive language for loosely coupled, message-driven systems",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
-  "engines": { "node": ">=20" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KaiSevelin/7k.git"
+  },
+  "homepage": "https://github.com/KaiSevelin/7k#readme",
+  "bugs": {
+    "url": "https://github.com/KaiSevelin/7k/issues"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc --build",
     "test": "vitest run",

@@ -1,8 +1,13 @@
 {
   "name": "@sevenk/cli",
   "version": "0.0.0",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "bin": { "7k": "./dist/index.js" },
-  "dependencies": { "@sevenk/core": "*" }
+  "bin": {
+    "7k": "./dist/index.js"
+  },
+  "dependencies": {
+    "@sevenk/core": "*"
+  }
 }
