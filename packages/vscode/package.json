@@ -5,16 +5,27 @@
   "version": "0.0.1",
   "private": true,
   "type": "commonjs",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Programming Languages"],
-  "activationEvents": [],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:7k",
+    "workspaceContains:**/*.7k"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "languages": [
       {
         "id": "7k",
-        "aliases": ["7K"],
-        "extensions": [".7k"],
+        "aliases": [
+          "7K"
+        ],
+        "extensions": [
+          ".7k"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -39,10 +50,9 @@
     "gen": "tsx scripts/gen-grammar.ts"
   },
   "dependencies": {
-    "@sevenk/core": "*",
-    "vscode-languageclient": "^9.0.1",
-    "vscode-languageserver": "^9.0.1",
-    "vscode-languageserver-textdocument": "^1.0.12"
+    "@sevenk/core": "*"
   },
-  "devDependencies": { "@types/vscode": "^1.90.0" }
+  "devDependencies": {
+    "@types/vscode": "^1.90.0"
+  }
 }

@@ -258,7 +258,7 @@ export function link(input: LinkInput): LinkResult {
     }
   }
 
-  return { model: withResolution(model, resolved), diagnostics };
+  return { model: withResolution(model, resolved, candidates), diagnostics };
 }
 
 /**
@@ -271,9 +271,21 @@ export interface LinkedModel extends Model {
   declFor(ref: Ref): Decl | undefined;
   /** True when `ref` names something visible from `fromPkg` (D42). */
   visibleFrom(ref: Ref, fromPkg: string): boolean;
+  /**
+   * Resolves a name as written, from a given package, by the same rules as the
+   * linker. Used by an editor for go-to-definition, hover and completion, so
+   * those answer exactly what the checker would.
+   */
+  lookup(fromPkg: string, text: string): Decl | undefined;
+  /** Declarations a name could refer to from `fromPkg` — the enclosing package and its imports. */
+  inScope(fromPkg: string): Decl[];
 }
 
-function withResolution(model: Model, resolved: Map<Ref, NodeId>): LinkedModel {
+function withResolution(
+  model: Model,
+  resolved: Map<Ref, NodeId>,
+  candidatesFor: (fromPkg: string, text: string) => { pkg: string; name: string }[],
+): LinkedModel {
   const resolve = (ref: Ref): NodeId | undefined => resolved.get(ref);
   const declFor = (ref: Ref): Decl | undefined => {
     const id = resolve(ref);
@@ -283,6 +295,20 @@ function withResolution(model: Model, resolved: Map<Ref, NodeId>): LinkedModel {
     ...model,
     resolve,
     declFor,
+    lookup(fromPkg, text) {
+      for (const c of candidatesFor(fromPkg, text)) {
+        const found = model.symbols.get(symbolKey(c.pkg, c.name));
+        if (found !== undefined) return found;
+      }
+      // A package name, for a tier member.
+      const pkg = model.packages.get(text);
+      return pkg === undefined ? undefined : undefined;
+    },
+    inScope(fromPkg) {
+      const visible = new Set<string>([fromPkg]);
+      for (const imp of model.packages.get(fromPkg)?.imports ?? []) visible.add(imp.target);
+      return model.decls.filter((d) => visible.has(d.id.pkg) && d.kind !== "upcast");
+    },
     visibleFrom(ref, fromPkg) {
       const d = declFor(ref);
       if (d === undefined) return true; // unresolved is reported elsewhere

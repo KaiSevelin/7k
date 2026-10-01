@@ -96,7 +96,7 @@ do Core, Sandbox and Spider.
 
 ```
 npm install
-npm test            # 252 tests
+npm test            # 269 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 
@@ -104,11 +104,22 @@ npm run check       # parses, resolves and analyses the examples and the spec
 declared twice, dependency cycles between packages, tier violations, leaked `@internal` messages,
 broken envelope chains, orphaned messages, replies with no route, and missing deduplication keys.
 
-**Editing 7K in VS Code.** Open this repo and press F5 to launch an Extension Development Host with
-`examples/` loaded. You get highlighting, syntax diagnostics as you type, and keyword completion
-scoped to the enclosing block — inside a `pipe` body it offers `delivery` and `ordering`, inside a
-`reacts` block it offers `replies` and `once per`. Completion of *your* names needs name resolution,
-which arrives at step 3.
+**Editing `.7k` files in VS Code.** Open this repo and press F5 to launch an Extension Development
+Host with `examples/` loaded.
+
+| | |
+|---|---|
+| Highlighting | declarations and their names, clauses, enumerated values, kernel types in lowercase against your `PascalCase` names, annotations, versions, durations, regex dialects |
+| Diagnostics | the **whole workspace**, resolved together — so a message in `common.7k` referenced from `ticketing.7k` resolves, and every analysis reports in the editor |
+| Completion | keywords scoped to the enclosing block, **and your own names** — messages after `emits`, pipes after `to`, records after `include`, qualified by import alias where they come from another package |
+| Go to definition | across files, resolved by the same rules the checker uses |
+| Hover | a declaration's kind, qualified name and guarantees — `pipe acme.shop.events : topic — at-least-once` |
+| Outline | declarations, with a service's subscriptions and a message's fields nested under them |
+
+It is a **direct extension, not a language server**. The language knowledge lives in `@sevenk/core`
+either way, so for one editor the protocol buys editor-independence nobody is using at the cost of a
+second process. If another editor ever matters, the same Core functions sit behind an LSP in an
+afternoon.
 
 The TextMate grammar is **generated** from Core's keyword set, and a test fails if the committed file
 is stale or if a keyword has no highlighting group. The keyword list has exactly one home.

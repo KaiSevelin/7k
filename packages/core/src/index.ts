@@ -55,3 +55,12 @@ export {
 } from "./parser/index.js";
 export * from "./ir/index.js";
 export { buildWorkspace, type Workspace, type WorkspaceInput } from "./workspace.js";
+export {
+  describe as describeDecl,
+  definitionAt,
+  editorCompletions,
+  identifierAt,
+  outline,
+  type OutlineEntry,
+  type TokenAt,
+} from "./editor.js";

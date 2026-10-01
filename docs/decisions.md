@@ -1702,6 +1702,36 @@ a regression.
 
 ---
 
+## D67 — The editor is a direct extension, not a language server
+
+The VS Code support registers providers against the VS Code API directly. The language server, three
+dependencies and the second process are gone.
+
+**Why:** the language knowledge was never in the server. `parse`, `buildWorkspace`, `editorCompletions`
+and `definitionAt` live in Core, and the editor layer is a translation either way — so the only question
+was whether that layer should be LSP-shaped or VS-Code-shaped. For one editor the protocol buys
+editor-independence nobody is using, at the cost of a second process and a second debugger.
+
+This is the same reasoning as D14 (instancing deferred) and D57 (views demoted): do not pay for
+generality that no requirement has asked for. The honest difference is that the LSP's cost was bounded
+and already paid, which made it a judgement call rather than an error — and that reversing it is an
+afternoon, because the logic is in Core.
+
+**If another editor ever matters**, keep the protocol: that is exactly what it is for, and the same Core
+functions sit behind it unchanged.
+
+**Editor services live in Core** (`editor.ts`): the outline, the identifier under a cursor, hover text,
+definition lookup and model-aware completion. Testable without an editor, and — the point — they answer
+exactly what `7k check` would, because resolution goes through the same model rather than through a
+second set of rules.
+
+**One thing the index does deliberately:** it resolves the *whole workspace* on every rebuild, not the
+open document. Names span files, so a per-document view would report unresolved references for names that
+are perfectly fine. Rebuilds are debounced and affordable at this size; making them incremental is a
+later problem that the CST already supports.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.
