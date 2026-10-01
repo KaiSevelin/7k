@@ -67,7 +67,7 @@ export const KEYWORDS: ReadonlySet<string> = new Set([
   "pipe", "queue", "topic", "stream",
   "delivery", "at-most-once", "at-least-once", "effectively-once", "within",
   "durable", "ordering", "none", "by", "retention", "maxsize", "dlq", "carries",
-  "service", "emits", "reacts", "accepts", "once", "per", "where", "requires",
+  "service", "emits", "reacts", "from", "accepts", "once", "per", "where", "requires",
   "replies", "concurrency", "retry", "after", "linear", "max",
   // process
   "saga", "start", "on", "keyed", "state", "step", "send", "timeout",

@@ -21,3 +21,9 @@ export {
   type Span,
 } from "./diagnostics.js";
 export { extractSpecBlocks, type SpecBlock } from "./spec-blocks.js";
+export {
+  completionsAt,
+  contextAt,
+  type CompletionContextKind,
+  type CompletionItem,
+} from "./completion.js";

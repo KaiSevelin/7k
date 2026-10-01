@@ -96,9 +96,18 @@ do Core, Sandbox and Spider.
 
 ```
 npm install
-npm test            # 121 tests
+npm test            # 134 tests
 npm run check       # lexes every example and every 7k block in the spec
 ```
+
+**Editing 7K in VS Code.** Open this repo and press F5 to launch an Extension Development Host with
+`examples/` loaded. You get highlighting, lexical diagnostics as you type, and keyword completion
+scoped to the enclosing block — inside a `pipe` body it offers `delivery` and `ordering`, inside a
+`reacts` block it offers `replies` and `once per`. Completion of *your* names needs name resolution,
+which arrives at step 3.
+
+The TextMate grammar is **generated** from Core's keyword set, and a test fails if the committed file
+is stale or if a keyword has no highlighting group. The keyword list has exactly one home.
 
 | Step | State |
 |---|---|
