@@ -43,7 +43,8 @@ generated identifiers, weighted mock outcomes — draws from it. A bug report is
 
 ```7k
 at 0s publish PlaceOrder as Storefront
-  with claims { sub: "CUST-9", scope: "orders.write" }
+  with claims   { sub: "CUST-9", scope: "orders.write" }
+  with envelope { customerId: "CUST-9" }
   {
     orderId: "ORD-1041",
     total:   { amount: "99.00", currency: "SEK" }
@@ -52,10 +53,22 @@ at 0s publish PlaceOrder as Storefront
 
 | Clause | Means |
 |---|---|
-| `as <Service>` | who emitted it — envelope propagation and `requires` both depend on it |
+| `as <Service>` | who emitted it. The pipe comes from that service's `emits` clause, so a scenario never names one |
 | `with claims { }` | the synthetic principal, which is what makes authorization failures testable |
+| `with envelope { }` | envelope values this send overrides; a runtime supplies the rest |
 | `{ body }` | canonical JSON (`01-kernel.md` section 7) |
 | `unchecked` | send a payload that violates its own contract, to exercise the rejection path |
+
+Both `with` clauses are needed, and the second exists because of the first. A `requires` that compares a
+claim against an envelope field — `claim.sub == envelope.customerId`, the ordinary shape of "the caller is
+who they say they are" — is untestable unless a scenario can set both sides. Left to a runtime to supply,
+the envelope value is arbitrary, and the assertion passes or fails by accident.
+
+**Claims are only checked when a scenario supplies them.** A `publish` with no `with claims` is not
+modelling identity, so `requires` is not evaluated for it. Otherwise every scenario about something else
+would have to carry a full claim set just to get past authorization, and the noise would be in every file.
+Once claims are present they are checked exactly, including against an absent envelope field — which is
+what makes the negative case above fail.
 
 Generator directives come from canonical JSON: `"$auto"`, `{ "$now": "+15m" }`, `{ "$repeat": 6, "of": ... }`,
 `{ "$invalid": "length" }`. `$invalid` with `unchecked` is how a consumer's rejection path and dead-letter
@@ -112,6 +125,16 @@ scenario PaymentNeverAnswers {
 
 A `mockset` is reusable defaults; `use` inherits it and a local `mock` overrides. That keeps each scenario
 about the one thing it is testing.
+
+**A subscription with no rule behaves according to what it declared.** One whose `replies none` owes no
+answer, so it succeeds silently — which is most consumers, and mocking every one of them in every scenario
+would be noise that hides the rules that matter. One that declares a reply and has no rule **hangs**, and
+the runner says so, because an unscripted service cannot be assumed to behave.
+
+**A reply payload is partial.** An unspecified required field is carried from the request when the names
+match, and generated otherwise. A mock then stays about the one field it is testing without breaking the
+correlation a real handler would have preserved — `reply SeatsReserved { heldUntil: ... }` keeps the
+request's `orderId` rather than inventing one.
 
 ### 4.1 Outcomes
 

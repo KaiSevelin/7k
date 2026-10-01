@@ -176,6 +176,24 @@ export interface EmitIr {
   readonly span: Span;
 }
 
+/**
+ * `retry <retries> [after <d>] [linear] [max <d>]`, lowered.
+ *
+ * Structured rather than kept as source text, because a runtime would otherwise have
+ * to re-parse it - and two parsers for one clause is exactly the divergence the IR
+ * exists to prevent. `retry 0` means deliver once and dead-letter on failure, so the
+ * number of attempts is always `retries + 1`.
+ */
+export interface RetryIr {
+  readonly retries: number;
+  readonly delayMs: number;
+  readonly backoff: "exponential" | "linear";
+  readonly maxMs?: number;
+}
+
+/** What a subscription does when no `retry` clause is written (`03-topology.md` 2.3). */
+export const RETRY_DEFAULT: RetryIr = { retries: 3, delayMs: 1_000, backoff: "exponential" };
+
 export interface ReactIr {
   readonly message: Ref;
   readonly pipe: Ref;
@@ -193,7 +211,8 @@ export interface ReactIr {
   /** Absent means the clause was omitted, which is `incomplete` (D30). */
   readonly replies?: readonly (Ref | "none")[];
   readonly concurrency?: string;
-  readonly retry?: string;
+  /** Absent means `RETRY_DEFAULT`. */
+  readonly retry?: RetryIr;
   readonly span: Span;
 }
 

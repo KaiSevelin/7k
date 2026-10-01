@@ -21,10 +21,13 @@ import {
 } from "../cst.js";
 import type { Span } from "../diagnostics.js";
 import type { Token } from "../token.js";
+import { parseDuration } from "../literals.js";
 import { lowerPredicate } from "./predicate.js";
 import {
   type SagaIr,
+  RETRY_DEFAULT,
   type ConstraintIr,
+  type RetryIr,
   type Decl,
   type DeclKind,
   type EmitIr,
@@ -234,6 +237,16 @@ function clauses(body: CstNode | undefined): Map<string, CstNode[]> {
   return out;
 }
 
+/**
+ * A version literal's value, without the `v` the source writes it with.
+ *
+ * The IR carries the value because that is what everything downstream needs: `1.0` is
+ * what canonical JSON puts in a message's `version` field (`01-kernel.md` section
+ * 7.3), what a projection emits, and what an `accepts` clause is compared against.
+ */
+const versionOf = (text: string | undefined): string | undefined =>
+  text === undefined ? undefined : text.replace(/^v/i, "");
+
 /** Everything after the clause keyword, as source text. */
 function clauseText(c: CstNode): string {
   const toks = childTokens(c);
@@ -248,9 +261,46 @@ function clauseText(c: CstNode): string {
       parts.push(child.text);
       continue;
     }
-    parts.push(joinAll(child));
+    // Spaced, not concatenated: a clause's text is read back by tooling, and
+    // `4after10smax15s` is not something anything can parse.
+    parts.push(childTokens(child).map((t) => t.text).join(" ") || joinAll(child));
   }
   return parts.join(" ").trim();
+}
+
+/**
+ * Lowers a `retry` clause. Read positionally off its keywords: `after` and `max` both
+ * take a duration, so which one a duration belongs to is a matter of what preceded it.
+ */
+function retryOf(c: CstNode | undefined): RetryIr | undefined {
+  if (c === undefined) return undefined;
+  const spec = childNodes(c, "RetrySpec")[0] ?? c;
+  const toks = childTokens(spec);
+
+  const retries = Number(toks.find((t) => t.kind === "int")?.text ?? "3");
+  let delayMs: number | undefined;
+  let maxMs: number | undefined;
+  let pending: "after" | "max" | undefined;
+
+  for (const tok of toks) {
+    if (tok.keyword === "after" || tok.keyword === "max") {
+      pending = tok.keyword;
+      continue;
+    }
+    if (tok.kind !== "duration") continue;
+    const ms = parseDuration(tok.text);
+    if (ms === undefined) continue;
+    if (pending === "max") maxMs = ms;
+    else delayMs = ms;
+    pending = undefined;
+  }
+
+  return {
+    retries: Number.isFinite(retries) ? retries : RETRY_DEFAULT.retries,
+    delayMs: delayMs ?? RETRY_DEFAULT.delayMs,
+    backoff: toks.some((t) => t.keyword === "linear") ? "linear" : "exponential",
+    ...(maxMs === undefined ? {} : { maxMs }),
+  };
 }
 
 const clauseKeywords = (c: CstNode): string[] =>
@@ -324,7 +374,7 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
 
     case "MessageDecl": {
       const body = childNodes(n, "Body")[0];
-      const version = childTokens(n).find((t) => t.kind === "version")?.text;
+      const version = versionOf(childTokens(n).find((t) => t.kind === "version")?.text);
       const intent = annotations.includes("command")
         ? "command"
         : annotations.includes("event")
@@ -354,8 +404,8 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
         kind: "upcast",
         id: { kind: "upcast", pkg: ctx.pkg, name: target?.text ?? "" },
         message: target ?? { to: null, text: "", span },
-        ...(versions[0] !== undefined ? { from: versions[0].text } : {}),
-        ...(versions[1] !== undefined ? { to: versions[1].text } : {}),
+        ...(versions[0] !== undefined ? { from: versionOf(versions[0].text)! } : {}),
+        ...(versions[1] !== undefined ? { to: versionOf(versions[1].text)! } : {}),
       };
     }
 
@@ -508,6 +558,7 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
 
   const oncePer = cl.get("once")?.[0];
   const concurrency = cl.get("concurrency")?.[0];
+  const retry = retryOf(cl.get("retry")?.[0]);
   const whereClause = cl.get("where")?.[0];
   const requiresClause = cl.get("requires")?.[0];
 
@@ -531,7 +582,7 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
       : {}),
     ...(replies !== undefined ? { replies } : {}),
     ...(concurrency !== undefined ? { concurrency: clauseText(concurrency) } : {}),
-    ...(cl.get("retry")?.[0] !== undefined ? { retry: clauseText(cl.get("retry")![0]!) } : {}),
+    ...(retry === undefined ? {} : { retry }),
     span,
   };
 }
@@ -543,7 +594,7 @@ function lowerSaga(
   id: NodeIdOf<"saga">,
 ): SagaIr {
   const body = childNodes(n, "Body")[0];
-  const version = childTokens(n).find((t) => t.kind === "version")?.text;
+  const version = versionOf(childTokens(n).find((t) => t.kind === "version")?.text);
 
   const startNode = body === undefined ? undefined : childNodes(body, "StartStmt")[0];
   const start =

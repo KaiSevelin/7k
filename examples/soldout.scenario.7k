@@ -109,6 +109,13 @@ scenario ReserveNeverAnswers {
 // ---------------------------------------------------------------------------
 // 4. Duplicate delivery: the handler replies, then fails, so the message is
 //    redelivered. Proves the consumer's `once per` key actually works.
+//
+//    A `sequence` rather than a bare `reply ... then fail`, because a handler that
+//    fails on every attempt duplicates once per retry - so the count would be the
+//    subscription's retry policy rather than this scenario's point. Replying then
+//    failing exactly once, and succeeding on redelivery, is the duplicate a
+//    consumer actually has to survive. The fixed reservationId is the dedup key
+//    under test, so it is written out rather than generated.
 // ---------------------------------------------------------------------------
 
 scenario ReserveRepliesThenFails {
@@ -116,7 +123,12 @@ scenario ReserveRepliesThenFails {
   use  Baseline
 
   mock ticketing.TicketService {
-    on ticketing.ReserveSeats reply ticketing.SeatsReserved { heldUntil: { $now: "+15m" } } then fail
+    on ticketing.ReserveSeats {
+      sequence {
+        reply ticketing.SeatsReserved { heldUntil: { $now: "+15m" } } then fail
+        reply ticketing.SeatsReserved { heldUntil: { $now: "+15m" } }
+      }
+    }
   }
 
   at 0s publish ticketing.ReserveSeats as OrderService {
@@ -128,6 +140,7 @@ scenario ReserveRepliesThenFails {
   advance 10s
   expect ticketing.SeatsReserved on ticketing.events count 2   // the pipe really duplicates
   expect OrderService handled ticketing.SeatsReserved count 1  // the key deduplicated it
+  expect no message on ticketing.commands.dead                 // and the retry succeeded
 }
 
 // ---------------------------------------------------------------------------

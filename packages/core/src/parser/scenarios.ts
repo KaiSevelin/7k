@@ -125,7 +125,11 @@ function publishStmt(c: Cursor): CstNode {
     }
     const withKw = c.eatKeyword("with");
     if (withKw !== undefined) {
-      parts.push(withKw, c.expectKeyword("claims"), json(c));
+      // `with claims` is the synthetic principal; `with envelope` overrides the
+      // values a runtime would otherwise supply. Both are needed: a `requires` that
+      // compares a claim against an envelope field is untestable without the second.
+      const which = c.eatKeyword("claims", "envelope");
+      parts.push(withKw, which ?? c.expectKeyword("claims"), json(c));
       continue;
     }
     break;

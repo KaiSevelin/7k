@@ -279,7 +279,7 @@ Fixtures and mock payloads often want a generated value rather than a literal on
 
 | Directive | Meaning |
 |---|---|
-| `"$auto"` | a valid value drawn from the field's constraints and examples |
+| `"$auto"` | a freshly generated value satisfying the field's constraints |
 | `{ "$example": 2 }` | the *n*th declared `example` for that field |
 | `{ "$now": "+15m" }` | virtual time, optionally offset. The **only** ambient value |
 | `{ "$repeat": 6, "of": {...} }` | a list of six, each element generated from `of` |
@@ -288,4 +288,14 @@ Fixtures and mock payloads often want a generated value rather than a literal on
 
 All draws come from the scenario seed, so a run is reproducible. `$invalid` is what makes the
 consumer's rejection path and DLQ testable.
+
+`$auto` is **type-directed**: it reads the field's declared type, so `$auto` for a record produces a
+record and `$auto` for a `SeatRef { length 1..16 }` produces something sixteen characters or shorter.
+It also **varies** between draws, because a `[T] { unique }` of generated elements has to actually be
+unique — which is why `$example` exists separately for when a declared example is what you want. A
+`pattern` is the one constraint a generator cannot invert, so `$auto` falls back to a declared `example`
+there, and a field with a pattern and no example is worth writing one for.
+
+A generator and a validator that disagree would make every fixture a lie, so an implementation must
+satisfy one property: **everything `$auto` produces, validation accepts.**
 

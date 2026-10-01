@@ -357,7 +357,7 @@ outcome      = "reply" ( qname [ json ] | "none" ) [ "after" durLit ] [ "then" "
              | "hang" ;
 
 publishStmt  = "publish" msgRef "as" ident [ "unchecked" ]
-               [ "with" "claims" json ] json ;
+               { "with" ( "claims" | "envelope" ) json } json ;
 
 expectStmt   = "expect" [ "no" ] msgRef "on" pipeRef [ matcher ] [ "count" intLit ]
              | "expect" ident "handled" msgRef "count" intLit

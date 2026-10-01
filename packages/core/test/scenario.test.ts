@@ -250,3 +250,114 @@ describe("checking a scenario against the model", () => {
     expect(w.diagnostics.map((d) => d.code)).toContain("weights-not-whole");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Lowering the clauses the sandbox exposed. Each of these was wrong until a
+// runtime actually acted on it, which is why they are tested at the shape level
+// and not only through a parse.
+// ---------------------------------------------------------------------------
+
+/** Lowers a one-scenario file against a trivial package. */
+function lowerOne(body: string): Workspace {
+  return buildWorkspace([
+    {
+      path: "m.7k",
+      source: `package p
+
+message M v1.0 @command { k: string { length 1..8 } @role(businessKey) }
+message R v1.0 @event { k: string { length 1..8 } @role(businessKey) }
+
+pipe q : queue
+
+service X {
+  emits M to q
+}
+
+service Y {
+  emits R to q
+  reacts M from q {
+    retry 4 after 10s max 15s
+    replies R
+  }
+}
+`,
+    },
+    { path: "s.scenario.7k", source: `scenarios for p\n\nscenario S {\n${body}\n}\n` },
+  ]);
+}
+
+describe("lowering a publish", () => {
+  it("pairs each block with the keyword that introduced it, in any order", () => {
+    const w = lowerOne(`  at 0s publish M as X
+    with claims   { sub: "u" }
+    with envelope { tenantId: "acme" }
+    { k: "a" }`);
+
+    const step = w.scenarios[0]?.scenarios[0]?.steps[0];
+    expect(step?.s).toBe("publish");
+    if (step?.s !== "publish") return;
+
+    expect(step.publish.claims).toEqual({ sub: "u" });
+    expect(step.publish.envelope).toEqual({ tenantId: "acme" });
+    expect(step.publish.payload).toEqual({ k: "a" });
+  });
+
+  it("reads a body with no `with` clause as the body", () => {
+    const w = lowerOne(`  at 0s publish M as X { k: "a" }`);
+    const step = w.scenarios[0]?.scenarios[0]?.steps[0];
+    if (step?.s !== "publish") throw new Error("expected a publish");
+
+    expect(step.publish.payload).toEqual({ k: "a" });
+    expect(step.publish.claims).toBeUndefined();
+    expect(step.publish.envelope).toBeUndefined();
+  });
+});
+
+describe("lowering an expectation", () => {
+  it("reads a saga assertion whose state collides with a keyword", () => {
+    // `Rejected` lexes as the keyword `rejected`, because names are case-insensitive
+    // (D40). The leading keyword decides the form; a later one never does.
+    const w = lowerOne(`  expect saga Sg["K-1"].state == Rejected`);
+    const step = w.scenarios[0]?.scenarios[0]?.steps[0];
+    if (step?.s !== "expect") throw new Error("expected an expectation");
+
+    expect(step.expect).toMatchObject({
+      e: "sagaState",
+      saga: "Sg",
+      key: "K-1",
+      property: "state",
+      value: "Rejected",
+    });
+  });
+
+  it("still reads a rejection assertion", () => {
+    const w = lowerOne(`  expect rejected M at Y reason unauthorized`);
+    const step = w.scenarios[0]?.scenarios[0]?.steps[0];
+    if (step?.s !== "expect") throw new Error("expected an expectation");
+
+    expect(step.expect).toMatchObject({ e: "rejected", message: "M", service: "Y", reason: "unauthorized" });
+  });
+});
+
+describe("lowering to values rather than to text (D73)", () => {
+  it("gives a retry policy as numbers, not as the clause's source", () => {
+    const w = lowerOne(`  at 0s publish M as X { k: "a" }`);
+    const service = w.model.decls.find((d) => d.kind === "service" && d.id.name === "Y");
+    if (service?.kind !== "service") throw new Error("expected a service");
+
+    expect(service.reacts[0]?.retry).toEqual({
+      retries: 4,
+      delayMs: 10_000,
+      backoff: "exponential",
+      maxMs: 15_000,
+    });
+  });
+
+  it("gives a version as its value, which is what canonical JSON carries", () => {
+    const w = lowerOne(`  at 0s publish M as X { k: "a" }`);
+    const message = w.model.decls.find((d) => d.kind === "message" && d.id.name === "M");
+    if (message?.kind !== "message") throw new Error("expected a message");
+
+    expect(message.version).toBe("1.0");
+  });
+});

@@ -330,7 +330,8 @@ describe("the IR is queryable", () => {
 
   it("carries message intent and visibility", () => {
     const m = decl<MessageIr>(w, "Go");
-    expect(m).toMatchObject({ version: "v1.0", intent: "command", visibility: { kind: "public" } });
+    // The value, not the literal: `1.0` is what canonical JSON carries.
+    expect(m).toMatchObject({ version: "1.0", intent: "command", visibility: { kind: "public" } });
   });
 
   it("marks an external service", () => {

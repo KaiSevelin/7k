@@ -70,6 +70,8 @@ export interface Publish {
   readonly message: string;
   readonly as?: string;
   readonly claims?: JsonValue;
+  /** Envelope values the scenario overrides; the rest a runtime supplies (D50). */
+  readonly envelope?: JsonValue;
   readonly payload?: JsonValue;
   readonly unchecked: boolean;
   readonly span: Span;
@@ -266,20 +268,35 @@ export function lowerScenarioFile(root: CstNode, file: string): {
 
   const publishOf = (n: CstNode): Publish => {
     const words = kws(n);
-    const idents = childTokens(n).filter((t) => t.kind === "ident");
     // `as <Service>` is a QName, which may be qualified by an import alias.
     const qnames = childNodes(n, "QName");
-    const asIndex = idents.findIndex((t) => t.keyword === "as");
-    const jsons = childNodes(n, "Json");
-    // `with claims { }` comes before the body, so two blocks means the first is claims.
-    const hasClaims = words.includes("claims");
-    const claims = hasClaims ? jsons[0] : undefined;
-    const payload = hasClaims ? jsons[1] : jsons[0];
+
+    // A publish may carry up to three blocks, so each is paired with the keyword
+    // that introduced it rather than with its position. Counting positions broke the
+    // moment `with envelope` joined `with claims`.
+    let claims: CstNode | undefined;
+    let envelope: CstNode | undefined;
+    let payload: CstNode | undefined;
+    let pending: "claims" | "envelope" | undefined;
+
+    for (const child of n.children) {
+      if (isToken(child)) {
+        if (child.keyword === "claims") pending = "claims";
+        else if (child.keyword === "envelope") pending = "envelope";
+        continue;
+      }
+      if (child.kind !== "Json") continue;
+      if (pending === "claims") claims = child;
+      else if (pending === "envelope") envelope = child;
+      else payload = child;
+      pending = undefined;
+    }
 
     return {
       message: refIn(n, "MsgRef") ?? "",
       ...(qnames[0] !== undefined ? { as: flat(qnames[0]) } : {}),
       ...(claims !== undefined ? { claims: jsonValue(claims) } : {}),
+      ...(envelope !== undefined ? { envelope: jsonValue(envelope) } : {}),
       ...(payload !== undefined ? { payload: jsonValue(payload) } : {}),
       unchecked: words.includes("unchecked"),
       span: span(n),
@@ -298,6 +315,31 @@ export function lowerScenarioFile(root: CstNode, file: string): {
       return { e: "noStuckSaga", saga: refIn(n, "QName") ?? "", span: at };
     }
 
+    // `saga` is tested before `rejected` because a saga state may itself be called
+    // `Rejected`, and names are case-insensitive (D40) - so the state lexes as the
+    // keyword. The leading keyword decides the form; a later one never does.
+    if (words.includes("saga")) {
+      const key = childTokens(n).find((t) => t.kind === "string");
+      if (key === undefined) {
+        return { e: "sagaCount", saga: refIn(n, "QName") ?? "", count: count ?? 0, span: at };
+      }
+      // Read positionally: a property or a state may collide with a keyword, so
+      // "the first plain identifier" is not a reliable way to find either.
+      const toks = childTokens(n);
+      const after = (text: string): string | undefined => {
+        const i = toks.findIndex((t) => t.text === text);
+        return i < 0 ? undefined : toks[i + 1]?.text;
+      };
+      return {
+        e: "sagaState",
+        saga: refIn(n, "QName") ?? "",
+        key: JSON.parse(key.text) as string,
+        property: after(".") ?? "state",
+        value: after("==") ?? "",
+        span: at,
+      };
+    }
+
     if (words.includes("rejected")) {
       const serviceName = childNodes(n, "QName")[0];
       return {
@@ -305,21 +347,6 @@ export function lowerScenarioFile(root: CstNode, file: string): {
         message: refIn(n, "MsgRef") ?? "",
         ...(serviceName !== undefined ? { service: flat(serviceName) } : {}),
         ...(idents[0] !== undefined ? { reason: idents[0].text } : {}),
-        span: at,
-      };
-    }
-
-    if (words.includes("saga")) {
-      const key = childTokens(n).find((t) => t.kind === "string");
-      if (key === undefined) {
-        return { e: "sagaCount", saga: refIn(n, "QName") ?? "", count: count ?? 0, span: at };
-      }
-      return {
-        e: "sagaState",
-        saga: refIn(n, "QName") ?? "",
-        key: JSON.parse(key.text) as string,
-        property: idents[0]?.text ?? "state",
-        value: idents[1]?.text ?? "",
         span: at,
       };
     }

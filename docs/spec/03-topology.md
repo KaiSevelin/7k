@@ -183,7 +183,7 @@ service TicketService {
 | `requires <predicate>` | none | authorization; see section 3 |
 | `replies A \| B` | unspecified (`incomplete`) | the handler's outcome space; see 2.1 |
 | `concurrency` | the pipe's ordering key; unconstrained if unordered | see 2.2 |
-| `retry` | 3 attempts, 1s base, exponential | see 2.3 |
+| `retry` | 3 retries (4 attempts), 1s base, exponential | see 2.3 |
 | `as <name>` | the service name | subscription name; see 2.4 |
 
 A service's identity is singular: there is exactly one `TicketService` in the model, however many
@@ -306,11 +306,21 @@ That is the whole policy and it needs no declaration. There is no failure-classi
 no way for a handler to signal a category — 7K already acts on everything it can know.
 
 ```
-retry <attempts> [after <delay>] [linear] [max <ceiling>]
+retry <retries> [after <delay>] [linear] [max <ceiling>]
 ```
 
-Exponential is the default. `retry 0` sends the first handler failure straight to the dead-letter
-pipe.
+Exponential is the default. The number is the count of **retries**, so the number of attempts is always
+one more: `retry 0` sends the first handler failure straight to the dead-letter pipe, and the default of
+three retries means four deliveries in all.
+
+A `max` ceiling caps each wait rather than their total, so `retry 4 after 10s max 15s` waits 10s, then
+15s, 15s, 15s.
+
+**Silence is not an acknowledgement.** A handler that never answers has not acknowledged the message, so
+a broker redelivers it once its visibility window lapses, and the retry policy then runs normally. 7K
+declares no such window: it is a property of a broker, not of a contract, and a model that named one
+would be naming a technology. A runtime therefore supplies it and must say what it chose — the sandbox
+calls it the acknowledgement deadline and defaults to five seconds of virtual time.
 
 Retry policy and dead-letter destination belong to the **subscription**, not the pipe. On a topic with
 three subscribers, each has its own failure appetite and its own dead-letter destination — which is

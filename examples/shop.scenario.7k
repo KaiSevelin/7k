@@ -28,7 +28,8 @@ scenario CheckoutSucceeds {
   use  HappyPath
 
   at 0s publish PlaceOrder as Storefront
-    with claims { sub: "CUST-9", scope: "orders.write" }
+    with claims   { sub: "CUST-9", scope: "orders.write" }
+    with envelope { customerId: "CUST-9" }
     {
       orderId: "ORD-1041",
       lines:   { $repeat: 2, of: { sku: "SKU-77", qty: 1, unit: { amount: "49.50", currency: "SEK" } } },
@@ -61,7 +62,8 @@ scenario CardDeclinedRefundsNothing {
   }
 
   at 0s publish PlaceOrder as Storefront
-    with claims { sub: "CUST-9", scope: "orders.write" }
+    with claims   { sub: "CUST-9", scope: "orders.write" }
+    with envelope { customerId: "CUST-9" }
     { orderId: "ORD-1042", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
 
   advance 1s
@@ -80,7 +82,8 @@ scenario ShipmentRejectedRefundsCharge {
   }
 
   at 0s publish PlaceOrder as Storefront
-    with claims { sub: "CUST-9", scope: "orders.write" }
+    with claims   { sub: "CUST-9", scope: "orders.write" }
+    with envelope { customerId: "CUST-9" }
     { orderId: "ORD-1043", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
 
   advance 2s
@@ -104,7 +107,8 @@ scenario PaymentNeverAnswers {
   }
 
   at 0s publish PlaceOrder as Storefront
-    with claims { sub: "CUST-9", scope: "orders.write" }
+    with claims   { sub: "CUST-9", scope: "orders.write" }
+    with envelope { customerId: "CUST-9" }
     { orderId: "ORD-1044", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
 
   advance 10s
@@ -125,11 +129,13 @@ scenario DuplicatePlaceOrder {
   use  HappyPath
 
   at 0s publish PlaceOrder as Storefront
-    with claims { sub: "CUST-9", scope: "orders.write" }
+    with claims   { sub: "CUST-9", scope: "orders.write" }
+    with envelope { customerId: "CUST-9" }
     { orderId: "ORD-1045", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
 
   at 0s publish PlaceOrder as Storefront
-    with claims { sub: "CUST-9", scope: "orders.write" }
+    with claims   { sub: "CUST-9", scope: "orders.write" }
+    with envelope { customerId: "CUST-9" }
     { orderId: "ORD-1045", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
 
   advance 2s
@@ -146,7 +152,8 @@ scenario PlaceOrderForSomeoneElse {
   use  HappyPath
 
   at 0s publish PlaceOrder as Storefront
-    with claims { sub: "CUST-1", scope: "orders.write" }     // sub != customerId
+    with claims   { sub: "CUST-1", scope: "orders.write" }
+    with envelope { customerId: "CUST-9" }                   // sub != customerId
     { orderId: "ORD-1046", lines: { $repeat: 1, of: "$auto" }, total: "$auto", card: "tok_live_x" }
 
   expect  rejected PlaceOrder at OrderService reason unauthorized

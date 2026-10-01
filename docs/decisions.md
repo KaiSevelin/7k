@@ -1732,6 +1732,111 @@ later problem that the CST already supports.
 
 ---
 
+## D68 — A scenario sets envelope values, not just a body and claims
+
+`publish` gains `with envelope { }` beside `with claims { }`. A runtime still supplies every field the
+scenario leaves out.
+
+**Why:** the ordinary shape of an authorization rule compares a claim against an envelope field —
+`requires claim.sub == envelope.customerId`, meaning "the caller is who they say they are". With no way to
+set the envelope, the runtime invents `customerId`, and the comparison passes or fails by accident. The
+sandbox found this the first time it ran `shop.scenario.7k`: the scenario whose comment said
+`// sub != customerId` was passing for a reason that had nothing to do with what it asserted.
+
+The kernel spec had promised it all along — "a scenario or composer writes only `body`, plus any envelope
+values it wants to override" (`01-kernel.md` 7.3) — and the grammar had never offered it. The same class of
+gap as the others this project has found: a sentence in the spec no implementation had been asked to
+satisfy.
+
+---
+
+## D69 — `requires` is evaluated only when the sender supplied claims
+
+A `publish` with no `with claims` is not modelling identity, so the subscription's `requires` is not
+evaluated for it. Once claims are present they are checked exactly, including against an absent envelope
+field.
+
+**Why:** the alternative is that every scenario about retries, deduplication or ordering must also carry a
+complete claim set to get past authorization. That noise would be in every file, and it would make the
+scenarios that are about authorization indistinguishable from the ones that merely tolerate it. Supplying
+claims is how a scenario opts in to being judged on them.
+
+The rule is one sentence, which matters more than it sounds: a conditional semantics nobody can state is
+worse than a strict one that is inconvenient.
+
+---
+
+## D70 — Silence is not an acknowledgement, and the deadline is the runtime's
+
+A handler that never answers has not acknowledged the message. The broker redelivers it once its visibility
+window lapses, and the retry policy then runs normally. 7K declares no window; a runtime supplies one and
+must say what it chose.
+
+**Why:** without this, `hang` and success are indistinguishable — nothing is scheduled, nothing fails,
+the message simply vanishes, and `30-scenarios.md` 4.1's claim that `hang` exercises "step timeouts and
+stuck instances" is false. The sandbox's `ReserveNeverAnswers` scenario is exactly this case, and it could
+not pass.
+
+It stays out of the language because a visibility timeout is a property of a broker, not of a contract.
+Putting it in a `pipe` clause would be naming a technology (D48), and the number would be wrong for every
+broker but one. So the sandbox names it instead — `--ack-timeout`, five virtual seconds by default — and
+being a runtime knob, two runtimes may legitimately choose differently without either being wrong.
+
+---
+
+## D71 — An unmocked subscription behaves according to what it declared
+
+A subscription whose `replies none` succeeds silently when no mock rule matches. One that declares a reply
+and has no rule hangs, and the runner says so.
+
+**Why:** most consumers of an event reply with nothing, and requiring a mock for each would mean every
+scenario carrying rules for services it is not testing. The rules that matter would be buried in the ones
+that do not. Meanwhile a service that owes an answer and has no script cannot be assumed to produce one —
+assuming success there would make a scenario pass for a reason the model does not support.
+
+The declaration already says which case a subscription is in, so nothing new had to be written down. This
+is the same instinct as defaults being the safe choice (D53): read the model rather than ask the author
+again.
+
+---
+
+## D72 — A mock's reply payload is partial, and fills from the request
+
+An unspecified required field in a reply is carried from the inbound message when the names match, and
+generated otherwise.
+
+**Why:** `reply SeatsReserved { heldUntil: { $now: "+15m" } }` is what an author wants to write, and
+`SeatsReserved` also requires `orderId` and `reservationId`. Demanding all three makes the mock about
+plumbing rather than about the one field under test. Generating them instead would be worse: a reply whose
+`orderId` does not match the request breaks the correlation a real handler would have preserved, and every
+downstream assertion with it.
+
+Carrying the field over is what a real handler does, so the fixture and the implementation agree by
+construction. Partial payloads here are the same choice as partial matching in expectations
+(`30-scenarios.md` 5): assert and specify what you mean, not everything.
+
+---
+
+## D73 — The IR carries values, not source text, for anything a runtime acts on
+
+`retry` lowers to `{ retries, delayMs, backoff, maxMs }` rather than to the clause's text, and a `version`
+lowers to `1.0` rather than to the literal `v1.0`.
+
+**Why:** the sandbox was re-parsing `react.retry` with a regular expression, which is a second parser for
+a clause Core already parsed — exactly the divergence the IR exists to prevent. It was also wrong: the
+lowering had been joining a nested clause's tokens without separators, so the runtime received
+`4after10smax15s` and silently fell back to the default policy. The retry test passed its attempt count
+and failed its timings, which is the only reason anyone noticed.
+
+The version case is the same shape. Canonical JSON carries `"version": "1.0"` (`01-kernel.md` 7.3), so a
+runtime, a projection and a code generator all strip the `v` — three places that must agree about a
+one-character convention. The IR should have held the value from the start.
+
+The general rule, worth stating because it will come up again: **if a consumer has to parse it, the IR
+lowered it too late.**
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.

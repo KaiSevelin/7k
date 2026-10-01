@@ -308,7 +308,8 @@ scenario CardDeclinedRefundsNothing {
   }
 
   at 0s publish PlaceOrder as Storefront
-    with claims { sub: "CUST-9", scope: "orders.write" }
+    with claims   { sub: "CUST-9", scope: "orders.write" }
+    with envelope { customerId: "CUST-9" }
     { orderId: "ORD-1042", total: { amount: "99.00", currency: "SEK" } }
 
   advance 1s
@@ -321,6 +322,7 @@ scenario CardDeclinedRefundsNothing {
 |---|---|
 | Selection | `when <predicate>` / `otherwise` · `sequence { }` · `85%` |
 | Driving | `seed` · `at <d> publish` · `advance <d>` · `every <d> for <d>` in a `soak` |
+| Sending | `as <Service>` · `with claims { }` · `with envelope { }` · `unchecked` |
 | Assertions | `expect [no] M on <pipe> [count n]` · `exactly { }` · `handled` · `rejected ... reason` · `saga X["k"].state ==` · `no stuck saga` |
 
 ---
@@ -329,7 +331,7 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 325 tests
+npm test            # 331 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 
@@ -341,6 +343,12 @@ not consume, load generation outside a `soak`, and weighted outcomes that do not
 
 It also parses every fenced `7k` block in `docs/spec` **and in this README**, so a decision cannot change
 without the specification, the reference above and the examples all following.
+
+**Running scenarios.** The sandbox lives in its own repository:
+[KaiSevelin/7k-sandbox](https://github.com/KaiSevelin/7k-sandbox). It runs a scenario file against a model
+on a virtual clock, so `advance 30d` finishes in microseconds, and a seed makes a failure a model plus a
+number. A service can be run live rather than mocked with `--live <Service>`, so the same scenario checks
+the same claim at three fidelities.
 
 **Editing `.7k` files.** The VS Code extension lives in its own repository:
 [KaiSevelin/7k-vscode](https://github.com/KaiSevelin/7k-vscode). It gives highlighting, diagnostics
