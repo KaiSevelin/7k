@@ -1,6 +1,9 @@
 export { lex, type LexResult } from "./lexer.js";
 export {
   KEYWORDS,
+  KEYWORD_ROLES,
+  keywordsWithRole,
+  type KeywordRole,
   HYPHENATED_KEYWORDS,
   PUNCTUATION,
   DURATION_UNITS,

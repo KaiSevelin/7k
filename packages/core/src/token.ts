@@ -48,49 +48,83 @@ export interface Token {
  * declaration and a predicate namespace, `on` appears in sagas and in mocks —
  * so the lexer only flags them and the parser decides what they mean.
  */
-export const KEYWORDS: ReadonlySet<string> = new Set([
-  // file and package
-  "package", "import", "as", "envelopes", "tier",
-  // contract
-  "label", "value", "enum", "record", "envelope", "message", "upcast",
-  "include", "invariant", "to", "absent",
-  // kernel types
-  "bool", "int", "float", "string", "bytes", "uuid", "instant", "duration",
-  "date", "decimal", "map",
-  // constraints and normalization
-  "length", "pattern", "normalize", "range", "multipleof", "size", "unique",
-  "default", "example",
-  "trim", "collapsespace", "strip", "upper", "lower", "nfc", "nfkc",
-  // regex dialects
-  "re2", "pcre", "ecma",
-  // topology
-  "pipe", "queue", "topic", "stream",
-  "delivery", "at-most-once", "at-least-once", "effectively-once", "within",
-  "durable", "ordering", "none", "by", "retention", "maxsize", "dlq", "carries",
-  "service", "emits", "reacts", "from", "accepts", "once", "per", "where", "requires",
-  "replies", "concurrency", "retry", "after", "linear", "max",
-  // process
-  "saga", "start", "on", "keyed", "state", "step", "send", "timeout",
-  "deadline", "undo", "with", "complete", "reject", "abandon",
-  "schedule", "every", "in", "onmissed", "skip", "all",
-  // scenarios (sibling spec)
-  "scenarios", "for", "scenario", "soak", "seed", "use", "mockset", "mock",
-  "reply", "hang", "fail", "then", "sequence", "when", "otherwise",
-  "at", "advance", "publish", "claims", "unchecked",
-  "expect", "no", "count", "exactly", "handled", "rejected", "reason", "stuck",
-  // predicates
-  "and", "or", "not", "contains", "claim",
-  // literals
-  "true", "false",
-  // reserved for later
-  "timer", "cancel", "cron",
-]);
+/**
+ * Keywords, classified by the role they play.
+ *
+ * The classification is language knowledge, not presentation: whether `delivery`
+ * introduces a clause and `queue` is one of its values is a fact about 7K. Keeping
+ * it here means a syntax highlighter is *derived* rather than maintained, so adding
+ * a keyword cannot leave one stale — which matters now that the editor lives in its
+ * own repository and its CI is not this one.
+ */
+export type KeywordRole =
+  /** Introduces a declaration. */
+  | "declaration"
+  /** A clause inside a declaration. */
+  | "clause"
+  /** An enumerated value a clause takes. */
+  | "value"
+  /** A connecting word: `to`, `from`, `by`, `with`. */
+  | "operator"
+  /** A kernel type name. */
+  | "type"
+  /** Reserved, but no construct uses it yet. */
+  | "reserved";
+
+export const KEYWORD_ROLES: ReadonlyMap<string, KeywordRole> = new Map(
+  (
+    [
+      ["declaration", [
+        "package", "import", "label", "value", "enum", "record", "envelope", "message",
+        "upcast", "pipe", "service", "saga", "schedule",
+        "scenarios", "scenario", "soak", "mockset", "mock", "step", "state",
+      ]],
+      ["clause", [
+        "envelopes", "tier", "include", "invariant",
+        "delivery", "durable", "ordering", "retention", "maxsize", "dlq", "carries",
+        "emits", "reacts", "accepts", "once", "per", "where", "requires", "replies",
+        "concurrency", "retry",
+        "start", "keyed", "send", "timeout", "deadline", "undo",
+        "on", "every", "onmissed",
+        "seed", "use", "reply", "sequence", "at", "advance", "publish", "claims",
+        "expect", "count", "exactly", "handled", "rejected", "reason", "stuck", "no",
+        "length", "pattern", "normalize", "range", "multipleof", "size", "unique",
+        "default", "example",
+      ]],
+      ["value", [
+        "queue", "topic", "stream",
+        "at-most-once", "at-least-once", "effectively-once",
+        "none", "linear", "skip", "all",
+        "complete", "reject", "abandon", "hang", "fail", "unchecked", "absent",
+        "true", "false",
+        "trim", "collapsespace", "strip", "upper", "lower", "nfc", "nfkc",
+        "re2", "pcre", "ecma",
+      ]],
+      ["operator", [
+        "to", "from", "as", "by", "with", "within", "after", "max", "in", "for",
+        "then", "when", "otherwise", "and", "or", "not", "contains", "claim",
+      ]],
+      ["type", [
+        "bool", "int", "float", "string", "bytes", "uuid", "instant", "duration",
+        "date", "decimal", "map",
+      ]],
+      ["reserved", ["timer", "cancel", "cron"]],
+    ] as const satisfies readonly (readonly [KeywordRole, readonly string[]])[]
+  ).flatMap(([role, words]) => words.map((w) => [w, role] as const)),
+);
 
 /**
- * Keywords containing a hyphen. Identifiers may not contain one
- * (`docs/spec/10-grammar.md`), so these are matched by maximal munch across the
- * hyphen rather than by widening the identifier rule.
+ * Reserved words, lowercased. 7K keywords are contextual — `message` is both a
+ * declaration and a predicate namespace, `on` appears in sagas and in mocks, and
+ * `reason` is an assertion subject and a perfectly good field name — so the lexer
+ * only flags them and the parser decides what they mean.
  */
+export const KEYWORDS: ReadonlySet<string> = new Set(KEYWORD_ROLES.keys());
+
+/** The keywords playing a given role, in declaration order. */
+export const keywordsWithRole = (role: KeywordRole): string[] =>
+  [...KEYWORD_ROLES].filter(([, r]) => r === role).map(([w]) => w);
+
 export const HYPHENATED_KEYWORDS: readonly string[] = [
   "at-most-once",
   "at-least-once",

@@ -329,7 +329,7 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 305 tests
+npm test            # 303 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 
@@ -340,19 +340,10 @@ chains, orphaned messages, replies with no route, missing deduplication keys.
 It also parses every fenced `7k` block in `docs/spec` **and in this README**, so a decision cannot change
 without the specification, the reference above and the examples all following.
 
-**Editing `.7k` files in VS Code.** Open this repo and press F5 for an Extension Development Host with
-`examples/` loaded.
-
-| | |
-|---|---|
-| Highlighting | declarations and names, clauses, enumerated values, kernel types against your own, annotations, versions, durations, regex dialects |
-| Diagnostics | the **whole workspace**, resolved together, so a message in one file referenced from another resolves and every analysis reports in the editor |
-| Completion | keywords scoped to the enclosing block, **and your own names** — messages after `emits`, pipes after `to`, qualified by import alias where they come from elsewhere |
-| Go to definition | across files, by the same rules the checker uses |
-| Hover | `pipe acme.shop.events : topic — at-least-once` |
-| Outline | declarations, with a service's subscriptions and a message's fields nested |
-
-A direct extension, not a language server: the language knowledge lives in `@sevenk/core` either way.
+**Editing `.7k` files.** The VS Code extension lives in its own repository:
+[KaiSevelin/7k-vscode](https://github.com/KaiSevelin/7k-vscode). It gives highlighting, diagnostics
+across the whole workspace, completion of your own declared names, go-to-definition, hover and an
+outline — all by calling into `@sevenk/core`, so it cannot disagree with `7k check`.
 
 ## Documentation
 
