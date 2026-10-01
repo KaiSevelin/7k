@@ -103,6 +103,11 @@ export const KEYWORD_ROLES: ReadonlyMap<string, KeywordRole> = new Map(
       ["operator", [
         "to", "from", "as", "by", "with", "within", "after", "max", "in", "for",
         "then", "when", "otherwise", "and", "or", "not", "contains", "claim",
+        // Two read namespaces belonging to whatever triggered a `send`: a schedule's
+        // `occurrence.due` and `occurrence.date`, and a terminal's `terminal.state` and
+        // `terminal.reason`. Contextual like `claim`, which is why they sit here rather
+        // than with the declarations.
+        "occurrence", "terminal",
       ]],
       ["type", [
         "bool", "int", "float", "string", "bytes", "uuid", "instant", "duration",

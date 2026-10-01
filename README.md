@@ -239,11 +239,11 @@ saga Checkout v1.0 {
   state { total: Money; chargeId: uuid }
 
   step charge {
-    send ChargeCard
+    send ChargeCard { amount = state.total }       // a block says what it carries
     on CardCharged  { chargeId = message.chargeId }
     on CardDeclined reject "card declined"
     on timeout 30s  reject "payment timed out"
-    undo with RefundCard
+    undo with RefundCard { chargeId = state.chargeId; amount = state.total }
   }
 
   step notify {
@@ -254,13 +254,18 @@ saga Checkout v1.0 {
 
   on deadline 24h abandon
   on complete send OrderCompleted
-  on reject   send OrderRejected
+  on reject   send OrderRejected { detail = terminal.reason }
 }
 ```
 
 `undo` runs only for a step that **completed**, in reverse order. There is no `call`: a saga drives another
 by sending its start message and handling its terminal messages. State is assigned only from received
 messages, so the checker can prove a field is set before an `undo` reads it.
+
+A `send` reads `state`, plus whatever triggered it — `terminal.state` and `terminal.reason` for a terminal,
+`occurrence.due` and `occurrence.date` for a schedule. Anything a block leaves out is filled from the
+instance: the message's `@role(businessKey)` field takes the instance key, which is what makes the reply
+correlate back, and any other field takes a `state` field of the same name. So most sends need no block.
 
 A saga is hosted by the service in its package that consumes its start message, and it observes what that
 service handled rather than subscribing itself — which is why a hosting service's `reacts` list includes
@@ -272,7 +277,7 @@ observable state is the step it is waiting in, or the terminal state it reached.
 ```7k
 schedule NightlySettlement {
   every    "0 2 * * *" in "Europe/Stockholm"   // the timezone is required
-  send     SettleDay
+  send     SettleDay { day = occurrence.date } // the day it was due, not the day it ran
   onMissed once                                // required: skip | once | all
 }
 ```
@@ -337,7 +342,7 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 336 tests
+npm test            # 352 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 

@@ -238,7 +238,27 @@ export interface AssignIr {
 }
 
 export type AssignSource =
-  | { readonly from: "message" | "envelope" | "claim"; readonly path: readonly string[] }
+  /**
+   * The three namespaces every layer shares, plus three a `send` may have in hand.
+   *
+   * The rule is that a `send` reads `state`, plus whatever triggered it. `state` reads the
+   * saga instance. `occurrence.due` is the instant a schedule firing was scheduled for and
+   * `occurrence.date` that instant's civil date in the schedule's declared timezone — a
+   * catch-up fires late, so `due` and `$now` differ, and for a settlement job that
+   * difference is the whole point. `terminal.state` is `complete`, `reject` or `abandon`,
+   * and `terminal.reason` the string a `reject` carried, which nothing could otherwise
+   * observe.
+   */
+  | {
+      readonly from:
+        | "message"
+        | "envelope"
+        | "claim"
+        | "state"
+        | "occurrence"
+        | "terminal";
+      readonly path: readonly string[];
+    }
   /** `note = absent` — clears the field, since there is no null in 7K. */
   | { readonly from: "absent" }
   | { readonly from: "literal"; readonly value: string | number | boolean };
@@ -270,14 +290,28 @@ export interface TimeoutIr {
 
 export type Terminal = "complete" | "reject" | "abandon";
 
+/**
+ * A message a step, an inverse or a schedule sends, and what it carries.
+ *
+ * `assigns` is what the author wrote. Everything it omits is filled by a runtime from
+ * the instance — the message's `@role(businessKey)` field takes the instance key, which
+ * is what makes the reply correlate back — so the block is for the fields a name match
+ * cannot reach, like a `ChargeCard.amount` held as `total`.
+ */
+export interface SendIr {
+  readonly message: Ref;
+  readonly assigns: readonly AssignIr[];
+  readonly span: Span;
+}
+
 export interface StepIr {
   readonly name: string;
-  readonly send?: Ref;
+  readonly send?: SendIr;
   readonly awaits: readonly AwaitIr[];
   /** Absent means the step is bounded only by the saga's deadline (`unbounded-step`). */
   readonly timeout?: TimeoutIr;
   /** Present with a message, present-and-null for `undo none`, absent otherwise. */
-  readonly undo: Ref | null | undefined;
+  readonly undo: SendIr | null | undefined;
   readonly span: Span;
 }
 
@@ -294,14 +328,14 @@ export interface SagaIr extends DeclBase {
   readonly steps: readonly StepIr[];
   /** Milliseconds. Absent means the saga is bounded only by its steps' timeouts. */
   readonly deadlineMs?: number;
-  readonly terminals: readonly { readonly on: Terminal; readonly send: Ref }[];
+  readonly terminals: readonly { readonly on: Terminal; readonly send: SendIr }[];
 }
 
 export interface ScheduleIr extends DeclBase {
   readonly kind: "schedule";
   readonly cron?: string;
   readonly timezone?: string;
-  readonly send?: Ref;
+  readonly send?: SendIr;
   readonly onMissed?: "skip" | "once" | "all";
 }
 

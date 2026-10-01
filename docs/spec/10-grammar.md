@@ -308,22 +308,30 @@ startStmt    = "start" "on" qname [ "keyed" "by" path ] [ body( assign ) ] ;
 stateDecl    = "state" body( field ) ;
 
 stepDecl     = anns "step" ident body( stepItem ) ;
-stepItem     = "send" qname
+stepItem     = sendStmt
              | "on" trigger [ action ]
-             | "undo" ( "with" qname | "none" ) ;
+             | "undo" ( "with" qname [ body( assign ) ] | "none" ) ;
 trigger      = qname | "timeout" durLit ;
 action       = body( assign ) | "reject" strLit | "abandon" ;
 
+sendStmt     = "send" qname [ body( assign ) ] ;
+
 onTerminal   = "on" "deadline" durLit "abandon"
-             | "on" ( "complete" | "reject" | "abandon" ) "send" qname ;
+             | "on" ( "complete" | "reject" | "abandon" ) sendStmt ;
 
 assign       = path "=" ( scopedPath | literal | "absent" ) ;
+scopedPath   = ( "message" | "envelope" | "claim" | "state" | "occurrence" | "terminal" ) "." path ;
 
 scheduleDecl = anns "schedule" ident body( scheduleItem ) ;
 scheduleItem = "every" strLit "in" strLit
-             | "send" qname
+             | sendStmt
              | "onMissed" ( "skip" | "once" | "all" ) ;
 ```
+
+A `send` reads `state`, plus whatever triggered it: `occurrence` for a schedule's firing and
+`terminal` for the outcome that ended a saga. A step's `send` has only `state`, since nothing
+else is in hand. The other three namespaces — `message`, `envelope`, `claim` — belong to an
+`on` action, which does have a message in hand.
 
 ## 7K Scenarios (sibling specification)
 

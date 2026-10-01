@@ -280,7 +280,12 @@ function assignBody(c: Cursor): CstNode {
       if (!x.atKind("ident")) return undefined;
       const parts: CstChild[] = [path(x), x.expectPunct("=")];
       if (x.atKeyword("absent")) parts.push(x.advance());
-      else if (x.atKeyword("message", "envelope", "claim")) parts.push(...assignSource(x));
+      // Five read namespaces. `message`, `envelope` and `claim` are the three every
+      // layer shares; `state` reads the saga instance and `occurrence` the schedule
+      // firing, which only a `send` has in hand.
+      else if (x.atKeyword("message", "envelope", "claim", "state", "occurrence", "terminal")) {
+        parts.push(...assignSource(x));
+      }
       else if (x.atKeyword("true", "false")) parts.push(x.advance());
       // A literal source: `tier = "gold"`. The grammar has always allowed one, and
       // without this branch `path` is asked to read a string and reports a missing name.
@@ -319,18 +324,36 @@ function onStmt(c: Cursor): CstNode {
     if (c.atKind("string")) act.push(c.advance());
     parts.push(node("Action", act));
   } else if (c.atKeyword("abandon")) parts.push(node("Action", [c.advance()]));
-  else if (c.atKeyword("send")) parts.push(node("Action", [c.advance(), msgRef(c)]));
+  else if (c.atKeyword("send")) {
+    // `on reject send OrderRejected { detail = terminal.reason }`. Without a payload a
+    // declared reject reason would be unobservable, and `reject "card declined"` would be
+    // decoration.
+    const act: CstChild[] = [c.advance(), msgRef(c)];
+    if (c.atPunct("{")) act.push(assignBody(c));
+    parts.push(node("Action", act));
+  }
 
   return node("OnStmt", parts);
 }
 
 const STEP_ITEMS = (c: Cursor): CstNode | undefined => {
-  if (c.atKeyword("send")) return node("Clause", [c.advance(), msgRef(c)]);
+  if (c.atKeyword("send")) {
+    // `send ChargeCard { amount = state.total }`. The block says what the message
+    // carries; anything it leaves out is filled from the instance by name.
+    const parts: CstChild[] = [c.advance(), msgRef(c)];
+    if (c.atPunct("{")) parts.push(assignBody(c));
+    return node("Clause", parts);
+  }
   if (c.atKeyword("on")) return onStmt(c);
   if (c.atKeyword("undo")) {
     const parts: CstChild[] = [c.advance()];
     if (c.atKeyword("none")) parts.push(c.advance());
-    else parts.push(c.expectKeyword("with"), msgRef(c));
+    else {
+      parts.push(c.expectKeyword("with"), msgRef(c));
+      // An inverse needs a payload for the same reason a step does, and more often:
+      // it is the one that reads the state the step recorded.
+      if (c.atPunct("{")) parts.push(assignBody(c));
+    }
     return node("UndoStmt", parts);
   }
   return undefined;
@@ -371,7 +394,10 @@ const SCHEDULE_ATTRS: ClauseTable = {
     parts.push(c.expectKeyword("in"));
     parts.push(c.eatKind("string") ?? c.missing("a timezone"));
   },
-  send: (c, parts) => parts.push(msgRef(c)),
+  send: (c, parts) => {
+    parts.push(msgRef(c));
+    if (c.atPunct("{")) parts.push(assignBody(c));
+  },
   onmissed: (c, parts) =>
     parts.push(c.eatKeyword("skip", "once", "all") ?? c.missing("`skip`, `once` or `all`")),
 };

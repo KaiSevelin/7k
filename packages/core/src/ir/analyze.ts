@@ -274,15 +274,15 @@ function orphanMessages(model: LinkedModel): Diagnostic[] {
     if (d.kind !== "saga") continue;
     if (d.start !== undefined) mark(consumed, d.start.message);
     for (const st of d.steps) {
-      if (st.send !== undefined) mark(emitted, st.send);
-      if (st.undo !== undefined && st.undo !== null) mark(emitted, st.undo);
+      if (st.send !== undefined) mark(emitted, st.send.message);
+      if (st.undo !== undefined && st.undo !== null) mark(emitted, st.undo.message);
       for (const a of st.awaits) mark(consumed, a.message);
     }
-    for (const t of d.terminals) mark(emitted, t.send);
+    for (const t of d.terminals) mark(emitted, t.send.message);
   }
   for (const d of model.decls) {
     if (d.kind !== "schedule" || d.send === undefined) continue;
-    mark(emitted, d.send);
+    mark(emitted, d.send.message);
   }
 
   for (const msg of messagesOf(model)) {

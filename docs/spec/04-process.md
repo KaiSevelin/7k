@@ -157,13 +157,26 @@ A step sends one message and waits. Every possible outcome is an `on`:
 | `reject "<reason>"` | terminate as rejected, running `undo` in reverse |
 | `abandon` | terminate as abandoned, running `undo` in reverse |
 
-**A step names the message it sends and not its contents.** There is no payload syntax
-here, so what a `send` carries is derived: the message's `@role(businessKey)` field takes
-the instance key — which is what makes the reply correlate back — and any other field takes
-a `state` field of the same name. A runtime must say which fields it had to supply itself,
-because a quietly invented payment amount is worse than a noisy one. Where a name does not
-line up, as `ChargeCard.amount` does not with `Checkout`'s `total`, there is currently no
-way to say so; see the open question in `../decisions.md`.
+**A step says what it sends and may say what it carries.**
+
+```7k
+send ChargeCard { amount = state.total }
+```
+
+Three sources, in order of authority. What the block says wins, because the author said it.
+Then the message's `@role(businessKey)` field takes the instance key — which is what makes
+the reply correlate back, so correlation needs no mechanism of its own — and any other field
+takes a `state` field of the same name. A runtime must report whatever is left over, because
+a quietly invented payment amount is worse than a noisy one.
+
+Most sends need no block at all: `send ArrangeShipment` carries `orderId` because it is the
+key and `lines` because the names agree. The block is for the fields a name match cannot
+reach, which is why `ChargeCard.amount` needs one and `Checkout` holds it as `total`.
+
+A `send` reads `state`, plus whatever triggered it. That is the whole rule, and it is why a
+step's send reads only state: nothing else is in hand yet. Assignment and comparison only, as
+everywhere in this layer — there is no arithmetic, so a derived amount is still the handler's
+business.
 
 **A step's `on` clauses must cover the outcome space** of whichever handler answers it. If
 `PaymentService` declares `replies CardCharged | CardDeclined`, a step omitting either is reported as
@@ -181,6 +194,12 @@ step charge {
   on CardCharged { chargeId = message.chargeId }
   undo with RefundCard
 }
+```
+
+An inverse takes a payload for the same reason, and needs one more often:
+
+```7k
+undo with RefundCard { chargeId = state.chargeId; amount = state.total }
 ```
 
 `undo with <Message>` is **co-located with the step it reverses** — declaring it elsewhere would mean
@@ -238,6 +257,16 @@ on abandon  send OrderAbandoned
 A terminal `send` uses the hosting service's `emits` routing (`03-topology.md` section 2). The service's
 `emits` list therefore includes messages its handlers never personally send, which is deliberate: routing
 stays in one table rather than being split between a service and a saga.
+
+A terminal send reads `terminal`: `terminal.state` is which of the three was reached, and
+`terminal.reason` the string a `reject` carried.
+
+```7k
+on reject send OrderRejected { detail = terminal.reason }
+```
+
+Without that, a declared reason would be unobservable and `reject "card declined"` would be
+decoration — the saga would know why it failed and no message could say so.
 
 These three names, and the step names, are also what an instance's observable state *is*: a
 running instance is in the step it is waiting in, and a finished one is its terminal state.
@@ -351,8 +380,20 @@ schedule NightlySettlement {
 | Clause | Kind | Means |
 |---|---|---|
 | `every <cron> in <tz>` | required | when it fires; the timezone is **required**, never implied |
-| `send <Message>` | required | what it sends; routed by the hosting service's `emits` |
+| `send <Message> { }` | required | what it sends, and optionally what it carries; routed by the hosting service's `emits` |
 | `onMissed` | **required** | `skip`, `once` or `all` — see below |
+
+A schedule's `send` reads `occurrence`: `occurrence.due` is the instant the occurrence was
+scheduled for, and `occurrence.date` that instant's civil date **in the timezone declared
+above**.
+
+```7k
+send SettleDay { day = occurrence.date }
+```
+
+Neither is `$now`. A catch-up fires late, so a settlement job told to use the current date
+settles the wrong day — which is precisely the bug `onMissed all` would otherwise introduce,
+and the reason this reads the occurrence rather than the clock.
 
 **The timezone is required** because a local-time schedule across a daylight-saving transition either fires
 twice or not at all, and that is a decision, never a default.
@@ -420,7 +461,7 @@ Everything the Process layer adds.
 | `keyed by` | the field identifying one instance (1.1) |
 | `state` | declared instance data, assigned only from received messages (1.2) |
 | `step` | one stage: send one message, wait for outcomes (1.3) |
-| `send` | dispatch a message, routed by the hosting service's `emits` |
+| `send` | dispatch a message, routed by the hosting service's `emits`; an optional block says what it carries |
 | `on` | a trigger and its action — the layer's only idiom |
 | `timeout` | how long a step waits (1.3) |
 | `deadline` | how long the whole saga may run (1.5) |
@@ -442,7 +483,9 @@ Everything the Process layer adds.
 ### Shared with the other layers
 
 `message.` reads the message in hand, `envelope.` its envelope, `claim.` the caller's claims — the same
-three namespaces predicates use everywhere (`10-grammar.md`). Versions are `v<major>.<minor>`. Canonical
+three namespaces predicates use everywhere (`10-grammar.md`). A `send` adds the ones belonging to whatever
+triggered it: `state.` the saga instance, `occurrence.` a schedule firing, `terminal.` the outcome that
+ended a saga. Versions are `v<major>.<minor>`. Canonical
 JSON with `$auto`, `$now`, `$repeat` and `$invalid` supplies every payload (`01-kernel.md` section 7).
 
 ### Two words worth care

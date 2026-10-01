@@ -447,3 +447,103 @@ describe("lowering a saga", () => {
     expect(saga.terminals.map((t) => t.on)).toEqual(["complete", "reject"]);
   });
 });
+
+describe("lowering a send's payload", () => {
+  const PAYLOAD_MODEL = `
+package p
+
+message Start v1.0 @command { k: string { length 1..8 } @role(businessKey) }
+message Go    v1.0 @command { k: string { length 1..8 } @role(businessKey) amount: int }
+message Ok    v1.0 @event   { k: string { length 1..8 } @role(businessKey) }
+message Back  v1.0 @command { k: string { length 1..8 } @role(businessKey) amount: int }
+message Won   v1.0 @event   { k: string { length 1..8 } @role(businessKey) }
+message Lost  v1.0 @event   { k: string { length 1..8 } @role(businessKey) why: string { length 1..60 } }
+message Tick  v1.0 @command { d: date @role(businessKey) }
+
+pipe q : queue
+pipe e : topic
+
+service S {
+  emits Go   to q
+  emits Back to q
+  emits Won  to e
+  emits Lost to e
+  emits Tick to q
+
+  reacts Start from q { replies none }
+  reacts Ok    from e { replies none }
+  reacts Tick  from q { replies none }
+}
+
+saga G v1.0 {
+  start on Start keyed by k { total = message.k }
+
+  state { total: int }
+
+  step one {
+    send Go { amount = state.total }
+    on Ok
+    on timeout 1m reject "slow"
+    undo with Back { amount = state.total }
+  }
+
+  on complete send Won
+  on reject   send Lost { why = terminal.reason }
+}
+
+schedule Nightly {
+  every    "0 2 * * *" in "UTC"
+  send     Tick { d = occurrence.date }
+  onMissed all
+}
+`;
+
+  function built(): import("../src/index.js").Workspace {
+    const w = buildWorkspace([{ path: "m.7k", source: PAYLOAD_MODEL }]);
+    expect(w.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    return w;
+  }
+
+  it("reads a step's send and its inverse from state", () => {
+    const saga = built().model.decls.find((d) => d.kind === "saga");
+    if (saga?.kind !== "saga") throw new Error("expected a saga");
+    const step = saga.steps[0]!;
+
+    expect(step.send?.assigns).toEqual([
+      expect.objectContaining({ target: ["amount"], source: { from: "state", path: ["total"] } }),
+    ]);
+    expect(step.undo).not.toBeNull();
+    expect(step.undo?.assigns).toEqual([
+      expect.objectContaining({ target: ["amount"], source: { from: "state", path: ["total"] } }),
+    ]);
+  });
+
+  it("reads a terminal's send from the terminal that ended the saga", () => {
+    const saga = built().model.decls.find((d) => d.kind === "saga");
+    if (saga?.kind !== "saga") throw new Error("expected a saga");
+
+    const reject = saga.terminals.find((t) => t.on === "reject");
+    expect(reject?.send.assigns).toEqual([
+      expect.objectContaining({ target: ["why"], source: { from: "terminal", path: ["reason"] } }),
+    ]);
+    // A terminal with no block carries nothing of its own.
+    expect(saga.terminals.find((t) => t.on === "complete")?.send.assigns).toEqual([]);
+  });
+
+  it("reads a schedule's send from the occurrence", () => {
+    const schedule = built().model.decls.find((d) => d.kind === "schedule");
+    if (schedule?.kind !== "schedule") throw new Error("expected a schedule");
+
+    expect(schedule.send?.assigns).toEqual([
+      expect.objectContaining({ target: ["d"], source: { from: "occurrence", path: ["date"] } }),
+    ]);
+  });
+
+  it("still resolves the message a send names, so routing is unaffected", () => {
+    const w = built();
+    const saga = w.model.decls.find((d) => d.kind === "saga");
+    if (saga?.kind !== "saga") throw new Error("expected a saga");
+    expect(w.model.declFor(saga.steps[0]!.send!.message)?.id.name).toBe("Go");
+    expect(w.model.declFor(saga.steps[0]!.undo!.message)?.id.name).toBe("Back");
+  });
+});

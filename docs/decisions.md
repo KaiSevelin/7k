@@ -1997,6 +1997,58 @@ and the end of the gap when it does not.
 
 ---
 
+## D81 — A `send` says what it carries, reading state and whatever triggered it
+
+```7k
+send ChargeCard { amount = state.total }
+undo with RefundCard { chargeId = state.chargeId; amount = state.total }
+on reject send OrderRejected { detail = terminal.reason }
+send SettleDay { day = occurrence.date }
+```
+
+A `send` reads `state`, plus the namespace belonging to whatever triggered it: `occurrence`
+for a schedule firing, `terminal` for the outcome that ended a saga. Anything the block omits
+is still filled from the instance — business key first, then a state field of the same name —
+so most sends need no block.
+
+**Why:** without this, 7K could not describe a correct saga. `send ChargeCard` named a message
+and could not say the amount came from the order total, which is as plainly true-or-false about
+the system as anything in the language. Three consequences, each on its own sufficient:
+
+- Every implementation had to invent a payload rule. The sandbox invented business-key plus
+  name-matching; a code generator would have invented something adjacent. That is exactly the
+  divergence one Core and a published IR exist to prevent (D48, D64, D73).
+- The simulation was lying. It charged a random amount and said so in a note, which is the best
+  a runtime can do when the model is silent, but a fixture that fabricates a payment is not a
+  test of a payment.
+- **`state-unset` was unimplementable.** The specification says `state` exists so the checker
+  can prove `chargeId` is set before an `undo` reads it — and that is the stated justification
+  for the one place the model reaches inside a service (1.2). But nothing *read* a state field
+  syntactically; `undo with RefundCard` name-matched at runtime. No field could be read, so no
+  field could be read-before-assigned, so the check was vacuous and the justification unearned.
+  Explicit reads make it real. That is why the payload came before the analyses.
+
+**Why `terminal`:** `reject "card declined"` was decoration. The saga knew why it failed and no
+message could say so, while `OrderRejected.detail` sat there obviously waiting for it. Two
+fields rather than one, because `terminal.state` lets a single message serve several terminals.
+
+**Why `occurrence` rather than `$now`:** a catch-up fires late. A settlement job reading the
+clock settles the day it ran rather than the day it was due, which is the bug `onMissed all`
+would otherwise introduce — the policy that exists to lose nothing would quietly settle the
+wrong day twice. `occurrence.date` is civil and in the schedule's declared zone, which is a
+third reason the zone is required.
+
+**What was rejected.** Renaming `Checkout`'s `total` to `amount` so the name match reaches it
+would make a message's field names and a saga's state names a shared namespace. A message is a
+contract owned by its package; instance state is private process data. Coupling them implicitly
+is the opposite of what making the wire type explicit and envelope propagation explicit was for,
+and it has no answer at all when two messages want the same value under different names.
+
+Still not a programming language: assignment and comparison, no arithmetic, no calls. A derived
+amount remains the handler's business.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.
@@ -2005,19 +2057,18 @@ Two remain. All others are resolved — see the decisions named.
    Reconsider if it sees little use.
 2. **Parameterized values** (`PostCode<SE>`). Deferred as a complexity cliff; the family approach
    (`SwedishPostCode`, `UKPostCode`) is the current answer.
-3. **A payload for `send`** — the Process layer can name the message a step or a schedule sends and
-   cannot say what to put in it. Name-matching against `state` plus the business-key rule covers most
-   of it (D76), but `ChargeCard.amount` from `Checkout`'s `total` needs a word, and a schedule has no
-   state at all, so `SettleDay.day` is the day the occurrence *ran* rather than the day it was *due*.
-   The assignment syntax an `on` action already uses would extend naturally — `send ChargeCard { amount
-   = total }` — and would stay within "assignment, comparison and simple predicates only". Not adopted
-   because it is new language surface and the gap is at least loud: the sandbox names every field it
-   had to invent.
+3. **Invariants are declared and never checked.** `message OrderPlaced` carries
+   `invariant total.currency == lines[].unit.currency`, the parser reads it, and the IR drops it: a
+   `MessageIr` has fields and includes and no invariants. So nothing validates one, in Core or in a
+   runtime, and a generated fixture happily produces a total in one currency and lines in another.
+   Smaller than it sounds — the predicate machinery already exists — but it is a declared constraint
+   that silently does nothing, which is worse than one that does not exist.
 
 ### Resolved
 
 | Was | Resolved by |
 |---|---|
+| A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |
 | Scenario file format | D62 — cumulative counts, partial matching, `soak` split out |

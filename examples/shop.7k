@@ -261,17 +261,22 @@ saga Checkout v1.0 {
   }
 
   step charge {
-    send ChargeCard
+    // The block says what the message carries. orderId is the instance key and fills
+    // itself; amount has to be said, because the state field holding it is `total`.
+    send ChargeCard { amount = state.total }
 
     on CardCharged  { chargeId = message.chargeId }   // no action: continue
     on CardDeclined reject "card declined"
     on timeout 30s  reject "payment timed out"
 
-    // Co-located with the step it reverses, and run only if this step completed.
-    undo with RefundCard
+    // Co-located with the step it reverses, and run only if this step completed. This
+    // is the case the per-step choice was made for: the inverse needs chargeId, which
+    // only the saga holds, and it is recorded by the `on CardCharged` action above.
+    undo with RefundCard { chargeId = state.chargeId; amount = state.total }
   }
 
   step ship {
+    // Nothing to say: orderId is the key and `lines` matches a state field by name.
     send ArrangeShipment
 
     on ShipmentBooked                                  // continue
@@ -284,7 +289,11 @@ saga Checkout v1.0 {
   on deadline 24h abandon
 
   on complete send OrderCompleted
-  on reject   send OrderRejected
+
+  // `reject "card declined"` would be decoration if nothing could read it back. The
+  // reason the saga rejected for is what OrderRejected.detail is for.
+  on reject   send OrderRejected { detail = terminal.reason }
+
   on abandon  send OrderAbandoned
 }
 
@@ -304,7 +313,12 @@ saga Checkout v1.0 {
 
 schedule NightlySettlement {
   every    "0 2 * * *" in "Europe/Stockholm"
-  send     SettleDay
+
+  // The day the occurrence was due, not the day it ran. A catch-up fires late, so for
+  // `onMissed all` those differ - and settling the wrong day is the bug this avoids.
+  // The date is civil, in the timezone declared above.
+  send     SettleDay { day = occurrence.date }
+
   onMissed all
 }
 

@@ -204,14 +204,14 @@ export function link(input: LinkInput): LinkResult {
         collect(d.start?.message, from, "a message");
         for (const f of d.state) collectType(f.type, from);
         for (const s of d.steps) {
-          collect(s.send, from, "a message");
+          collect(s.send?.message, from, "a message");
           for (const a of s.awaits) collect(a.message, from, "a message");
-          collect(s.undo ?? undefined, from, "a message");
+          collect(s.undo?.message, from, "a message");
         }
-        for (const t of d.terminals) collect(t.send, from, "a message");
+        for (const t of d.terminals) collect(t.send.message, from, "a message");
         break;
       case "schedule":
-        collect(d.send, from, "a message");
+        collect(d.send?.message, from, "a message");
         break;
       default:
         break;

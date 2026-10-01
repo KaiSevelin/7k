@@ -31,6 +31,7 @@ import {
   type ConstraintIr,
   type RetryIr,
   type SagaAction,
+  type SendIr,
   type Terminal,
   type TimeoutIr,
   type Decl,
@@ -446,9 +447,7 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
       const strings = every === undefined ? [] : childTokens(every).filter((t) => t.kind === "string");
       const missed = cl.get("onmissed")?.[0];
       const policy = missed === undefined ? undefined : clauseKeywords(missed)[0];
-      const sendClause = cl.get("send")?.[0];
-      const scheduleSend =
-        sendClause === undefined ? undefined : ref(ctx, childNodes(sendClause, "MsgRef")[0]);
+      const scheduleSend = sendOf(ctx, cl.get("send")?.[0]);
       return {
         ...base,
         kind: "schedule",
@@ -592,6 +591,16 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
   };
 }
 
+/** The namespaces an assignment may read. `state` and `occurrence` are a send's. */
+const SOURCE_SCOPES: ReadonlySet<string> = new Set([
+  "message",
+  "envelope",
+  "claim",
+  "state",
+  "occurrence",
+  "terminal",
+]);
+
 /**
  * `chargeId = message.chargeId`, `note = absent`, `tier = "gold"`.
  *
@@ -605,16 +614,14 @@ function assignOf(ctx: Ctx, n: CstNode): AssignIr | undefined {
 
   const span = spanOf(ctx.file, n);
   const toks = childTokens(n);
-  const scope = toks.find(
-    (t) => t.keyword === "message" || t.keyword === "envelope" || t.keyword === "claim",
-  );
+  const scope = toks.find((t) => t.keyword !== undefined && SOURCE_SCOPES.has(t.keyword));
 
   if (scope !== undefined) {
     const inner = paths[1];
     return {
       target: pathSegments(target),
       source: {
-        from: scope.keyword as "message" | "envelope" | "claim",
+        from: scope.keyword as "message" | "envelope" | "claim" | "state" | "occurrence",
         path: inner === undefined ? [] : pathSegments(inner),
       },
       span,
@@ -637,10 +644,11 @@ function assignOf(ctx: Ctx, n: CstNode): AssignIr | undefined {
     return { target: pathSegments(target), source: { from: "literal", value: literalValue(literal) }, span };
   }
 
-  // A bare path on the right, which only a half-written assignment produces.
+  // A bare path on the right, which only a half-written assignment produces. Read as
+  // `state`, since that is what an unqualified name means where one is in scope.
   const bare = paths[1];
   if (bare === undefined) return undefined;
-  return { target: pathSegments(target), source: { from: "message", path: pathSegments(bare) }, span };
+  return { target: pathSegments(target), source: { from: "state", path: pathSegments(bare) }, span };
 }
 
 const literalValue = (t: Token): string | number | boolean => {
@@ -685,6 +693,23 @@ function actionOf(ctx: Ctx, on: CstNode): SagaAction {
     };
   }
   return { a: "continue", assigns: assignsIn(ctx, childNodes(action, "Body")[0] ?? action) };
+}
+
+/**
+ * A `send` and what it carries.
+ *
+ * `holder` is the clause the message reference sits on, so the assignment block is read
+ * from the same node rather than hunted for elsewhere.
+ */
+function sendOf(ctx: Ctx, holder: CstNode | undefined): SendIr | undefined {
+  if (holder === undefined) return undefined;
+  const message = ref(ctx, childNodes(holder, "MsgRef")[0]);
+  if (message === undefined) return undefined;
+  return {
+    message,
+    assigns: assignsIn(ctx, childNodes(holder, "Body")[0]),
+    span: spanOf(ctx.file, holder),
+  };
 }
 
 function lowerSaga(ctx: Ctx, n: CstNode, base: DeclBaseFields, id: NodeIdOf<"saga">): SagaIr {
@@ -744,10 +769,10 @@ function lowerSaga(ctx: Ctx, n: CstNode, base: DeclBaseFields, id: NodeIdOf<"sag
       });
     }
 
-    const sendRef = sends[0] === undefined ? undefined : ref(ctx, childNodes(sends[0], "MsgRef")[0]);
+    const send = sendOf(ctx, sends[0]);
     return {
       name: declName(s)?.name ?? "",
-      ...(sendRef !== undefined ? { send: sendRef } : {}),
+      ...(send === undefined ? {} : { send }),
       awaits,
       ...(timeout === undefined ? {} : { timeout }),
       undo:
@@ -755,7 +780,7 @@ function lowerSaga(ctx: Ctx, n: CstNode, base: DeclBaseFields, id: NodeIdOf<"sag
           ? undefined
           : clauseKeywords(undoNode).includes("none")
             ? null
-            : (ref(ctx, childNodes(undoNode, "MsgRef")[0]) ?? null),
+            : (sendOf(ctx, undoNode) ?? null),
       span: spanOf(ctx.file, s),
     };
   });
@@ -763,7 +788,7 @@ function lowerSaga(ctx: Ctx, n: CstNode, base: DeclBaseFields, id: NodeIdOf<"sag
   // Saga-level `on` statements: the deadline and the terminal sends.
   const sagaOns = body === undefined ? [] : childNodes(body, "OnStmt");
   let deadlineMs: number | undefined;
-  const terminals: { on: Terminal; send: Ref }[] = [];
+  const terminals: { on: Terminal; send: SendIr }[] = [];
 
   for (const on of sagaOns) {
     const trigger = childNodes(on, "Trigger")[0];
@@ -775,8 +800,7 @@ function lowerSaga(ctx: Ctx, n: CstNode, base: DeclBaseFields, id: NodeIdOf<"sag
       continue;
     }
     if (kw === "complete" || kw === "reject" || kw === "abandon") {
-      const action = childNodes(on, "Action")[0];
-      const send = action === undefined ? undefined : ref(ctx, childNodes(action, "MsgRef")[0]);
+      const send = sendOf(ctx, childNodes(on, "Action")[0]);
       if (send !== undefined) terminals.push({ on: kw, send });
     }
   }
