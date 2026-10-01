@@ -19,6 +19,15 @@ import { buildWorkspace, type Diagnostic } from "../src/index.js";
 const MODEL = `
 package p
 
+envelope Meta {
+  correlationId: uuid @role(correlation)
+  causationId:   uuid @derive(inbound.id) @role(causation)
+  tenantId:      Ref  @role(partitionKey)
+  actor:         Ref  @role(subject)
+}
+
+envelopes Meta
+
 value Ref  : string { length 1..16 }
 value Tick : string { length 1..16 }
 
@@ -32,7 +41,6 @@ message Back    v1.0 @command { k: Ref @role(businessKey) id: uuid }
 
 message Ship    v1.0 @command { k: Ref @role(businessKey) }
 message Shipped v1.0 @event   { k: Ref @role(businessKey) }
-message Unship  v1.0 @command { k: Ref @role(businessKey) }
 
 message Won     v1.0 @event   { k: Ref @role(businessKey) }
 message Lost    v1.0 @event   { k: Ref @role(businessKey) why: string { length 1..60 } }
@@ -43,7 +51,7 @@ message Printed v1.0 @event   { t: Tick @role(businessKey) k: Ref }
 pipe q : queue
 pipe e : topic
 
-service Caller {
+service Caller @external {
   emits Place to q
 }
 
@@ -51,7 +59,6 @@ service Host {
   emits Charge to q
   emits Back   to q
   emits Ship   to q
-  emits Unship to q
   emits Taken  to e
   emits Won    to e
   emits Lost   to e
@@ -75,13 +82,14 @@ service Shipping {
   emits Shipped to e
 
   reacts Ship   from q { replies Shipped }
-  reacts Unship from q { replies none }
 }
 
 // A printer and an observer, so no message is emitted into nothing or consumed from
 // nowhere. The baseline has to be clean of every finding, or a false positive in one of
 // these checks hides behind an unrelated warning.
-service Printer {
+// External: a stand-in for something outside the system, whose behaviour 7K does not
+// describe, so nothing is expected to explain what makes it publish.
+service Printer @external {
   emits Printed to e
 }
 

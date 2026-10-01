@@ -8,6 +8,9 @@ import {
   type PipeIr,
   type ServiceIr,
   type Workspace,
+  admits,
+  parseAccepts,
+  showAccepts,
 } from "../src/index.js";
 
 const ws = (...files: readonly [string, string][]): Workspace =>
@@ -71,7 +74,10 @@ describe("resolution", () => {
       ["c.7k", "package acme.c\nrecord Address {\n  line: string\n}\n"],
       ["d.7k", "package acme.d\nimport acme.c\nmessage M v1.0 @event {\n  home: c.Address\n}\n"],
     );
-    expect(codes(w)).toEqual([]);
+    // Narrowed deliberately: this asks about resolution, and a two-line model trips
+    // several warnings that have nothing to do with it.
+    expect(codes(w, "error")).toEqual([]);
+    expect(codes(w)).not.toContain("unresolved-reference");
   });
 
   it("resolves case-insensitively against the declaring spelling", () => {
@@ -260,7 +266,8 @@ describe("orphan-message", () => {
         "service S {\n  emits Done to c\n  reacts Go from c {\n    replies Done\n  }\n}\n" +
         "saga Flow v1.0 {\n  start on Done\n  step s {\n    send Go\n    on Done\n  }\n}\n",
     ]);
-    expect(codes(w, "warning")).toEqual([]);
+    // This asks only whether a saga's sends and awaits count as emitted and consumed.
+    expect(codes(w)).not.toContain("orphan-message");
   });
 });
 
@@ -545,5 +552,81 @@ schedule Nightly {
     if (saga?.kind !== "saga") throw new Error("expected a saga");
     expect(w.model.declFor(saga.steps[0]!.send!.message)?.id.name).toBe("Go");
     expect(w.model.declFor(saga.steps[0]!.undo!.message)?.id.name).toBe("Back");
+  });
+});
+
+describe("versions and accepted ranges", () => {
+  it("reads every form the specification lists", () => {
+    expect(parseAccepts("v1.0")).toEqual({ k: "exact", at: { major: 1, minor: 0 } });
+    expect(parseAccepts("v1 . x")).toEqual({ k: "major", major: 1 });
+    expect(parseAccepts("v1.2 .. v2.4")).toEqual({
+      k: "range",
+      from: { major: 1, minor: 2 },
+      to: { major: 2, minor: 4 },
+    });
+    expect(parseAccepts("v1.2 +")).toEqual({ k: "atLeast", at: { major: 1, minor: 2 } });
+  });
+
+  it("ignores the spacing the lowering happens to produce", () => {
+    // `v1.x` arrives as three tokens, so the clause text is `v1 . x`. A consumer reading it
+    // with a regular expression broke on exactly this.
+    expect(parseAccepts("v1.x")).toEqual(parseAccepts("v1 . x"));
+    expect(parseAccepts("v1.2..v2.4")).toEqual(parseAccepts("v1.2 .. v2.4"));
+  });
+
+  it("declines what is not a range", () => {
+    for (const bad of ["", "x", "v1", "1", "v1.x.y"]) {
+      expect(parseAccepts(bad), bad).toBeUndefined();
+    }
+  });
+
+  it("admits the versions each form should", () => {
+    const v = (major: number, minor: number): { major: number; minor: number } => ({ major, minor });
+
+    expect(admits(parseAccepts("v1.0")!, v(1, 0))).toBe(true);
+    expect(admits(parseAccepts("v1.0")!, v(1, 1))).toBe(false);
+
+    expect(admits(parseAccepts("v1.x")!, v(1, 7))).toBe(true);
+    expect(admits(parseAccepts("v1.x")!, v(2, 0))).toBe(false);
+
+    expect(admits(parseAccepts("v1.2+")!, v(1, 2))).toBe(true);
+    expect(admits(parseAccepts("v1.2+")!, v(9, 9))).toBe(true);
+    expect(admits(parseAccepts("v1.2+")!, v(1, 1))).toBe(false);
+
+    const span = parseAccepts("v1.2..v2.4")!;
+    expect(admits(span, v(1, 2))).toBe(true);
+    expect(admits(span, v(2, 4))).toBe(true);
+    expect(admits(span, v(2, 5))).toBe(false);
+    expect(admits(span, v(1, 1))).toBe(false);
+  });
+
+  it("renders a range back the way it was written", () => {
+    for (const form of ["v1.0", "v1.x", "v1.2+", "v1.2..v2.4"]) {
+      expect(showAccepts(parseAccepts(form)!)).toBe(form);
+    }
+  });
+
+  it("lowers an `accepts` clause to a value, not to its text", () => {
+    const w = buildWorkspace([
+      {
+        path: "m.7k",
+        source: `package p
+
+message M v1.0 @command { k: string { length 1..8 } @role(businessKey) }
+
+pipe q : queue
+
+service S {
+  reacts M from q {
+    accepts v1.x
+    replies none
+  }
+}
+`,
+      },
+    ]);
+    const service = w.model.decls.find((d) => d.kind === "service");
+    if (service?.kind !== "service") throw new Error("expected a service");
+    expect(service.reacts[0]?.accepts).toEqual({ k: "major", major: 1 });
   });
 });

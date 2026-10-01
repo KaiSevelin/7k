@@ -12,6 +12,7 @@
 
 import type { Span } from "../diagnostics.js";
 import type { Predicate } from "./predicate.js";
+import type { Accepts } from "./version.js";
 
 export type DeclKind =
   | "label"
@@ -198,7 +199,8 @@ export interface ReactIr {
   readonly message: Ref;
   readonly pipe: Ref;
   readonly subscription: string;
-  readonly accepts?: string;
+  /** The version range this subscription admits. Absent means every version. */
+  readonly accepts?: Accepts;
   /**
    * The deduplication scope. Absent means "default to the message's
    * `@role(businessKey)` field"; `{ none: true }` is a deliberate claim that the

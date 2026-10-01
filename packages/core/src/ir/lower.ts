@@ -22,6 +22,7 @@ import {
 import type { Span } from "../diagnostics.js";
 import type { Token } from "../token.js";
 import { parseDuration } from "../literals.js";
+import { parseAccepts } from "./version.js";
 import { lowerPredicate } from "./predicate.js";
 import {
   type SagaIr,
@@ -563,6 +564,9 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
   const oncePer = cl.get("once")?.[0];
   const concurrency = cl.get("concurrency")?.[0];
   const retry = retryOf(cl.get("retry")?.[0]);
+  const acceptsClause = cl.get("accepts")?.[0];
+  const accepts =
+    acceptsClause === undefined ? undefined : parseAccepts(clauseText(acceptsClause));
   const whereClause = cl.get("where")?.[0];
   const requiresClause = cl.get("requires")?.[0];
 
@@ -570,9 +574,7 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
     message: ref(ctx, childNodes(n, "MsgRef")[0]) ?? { to: null, text: "", span },
     pipe: ref(ctx, childNodes(n, "PipeRef")[0]) ?? { to: null, text: "", span },
     subscription,
-    ...(cl.get("accepts")?.[0] !== undefined
-      ? { accepts: clauseText(cl.get("accepts")![0]!) }
-      : {}),
+    ...(accepts === undefined ? {} : { accepts }),
     ...(oncePer === undefined
       ? {}
       : clauseKeywords(oncePer).includes("none")

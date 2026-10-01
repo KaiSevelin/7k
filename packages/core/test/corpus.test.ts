@@ -118,11 +118,19 @@ describe("the example workspace", () => {
       .map((d) => `${d.code} ${d.span.file}`)
       .sort();
     expect(found).toEqual([
+      // KioskBridge pins `accepts TicketIssued v1.0`, so it must deploy before
+      // TicketService bumps. True today, a constraint on the next release.
+      "deploy-order examples/sales.7k",
       // Nothing consumes it: the sales packages publish it for a reader that is
       // not modelled here.
       "orphan-message examples/sales.7k",
       // Deliberately package-private, and documented in the file as an orphan.
       "orphan-message examples/ticketing.7k",
+      // OrderService sends ticketing's two commands and nothing in the model says
+      // what prompts it. Genuine: sales.7k has no saga, so its flow is choreography
+      // the model implies rather than states. shop.7k is the same shape described.
+      "unexplained-emit examples/sales.7k",
+      "unexplained-emit examples/sales.7k",
     ]);
   });
 

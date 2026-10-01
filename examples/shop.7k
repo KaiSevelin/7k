@@ -357,9 +357,12 @@ schedule NightlySettlement {
 //   command-on-topic   none - the four @command messages are on queues.
 //   boundary pipes     inbound only. It projects JSON Schema in `strict`
 //                      mode; commands and events stay tolerant.
-//   unexplained-emit   none - OrderCompleted, OrderRejected and OrderAbandoned
-//                      are explained by the saga's terminal `on` clauses rather
-//                      than by a `replies`.
+//   unexplained-emit   none - and the interesting part is why ChargeCard,
+//                      ArrangeShipment and RefundCard are clean: no `replies`
+//                      mentions them, the saga's steps and `undo` clauses do. The
+//                      same two commands in sales.7k, which has no saga, are
+//                      flagged. Events are not checked; a service publishing a fact
+//                      about its own work is internals.
 //
 // Implicit, never written: inbound.dead, commands.dead and
 // events.dead; at-least-once delivery and durability everywhere;

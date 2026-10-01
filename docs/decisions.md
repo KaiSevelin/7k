@@ -2103,6 +2103,77 @@ It is now checked, and the comment says which parts are checked rather than asse
 
 ---
 
+## D83 — `unexplained-emit` applies to commands, not events
+
+A service emitting a `@command` that no `replies`, saga or schedule accounts for is a
+warning. An `@event` is not checked.
+
+**Why:** the first implementation checked both and found seven things in three example
+packages, of which three were unactionable. `TicketService` publishes `SeatInventoryChanged`
+while handling a reservation, and there is no way to declare that — `replies` is the outcome
+space the *sender* awaits, so putting a notification in it would be wrong twice over: a saga
+step would then have to handle it, and nobody is waiting for it. What prompts a service to
+publish a fact about its own work is its internals, which `03-topology.md` 2.0 puts out of
+scope deliberately.
+
+A command is the opposite. It is an instruction to somebody else, so something has to have
+decided to issue it, and the model should be able to say what. Narrowed, the check found two
+things in the same corpus and both are real: `OrderService` sends `ticketing.ReserveSeats`
+and `ticketing.ReleaseSeats`, and `acme.retail.sales` has no saga, so its flow is
+choreography the model implies rather than states. `shop.7k` is the same shape written down,
+and it is clean.
+
+The deciding argument is about the check's own credibility. Three unactionable warnings out
+of seven is how a checker teaches people to ignore it, and a warning nobody reads is worse
+than one that was never written.
+
+---
+
+## D84 — `accepts` lowers to a range, and one predicate answers it
+
+`accepts` becomes `{ k: "exact" | "major" | "range" | "atLeast" }`, and `admits(range,
+version)` is the single predicate both the checker and a runtime call.
+
+**Why:** D73 again, with a bug attached. `accepts v1.x` reaches the IR as three tokens, so its
+clause text is `v1 . x` — and the sandbox was reading it with `endsWith(".x")`, which is false
+for that string. Every version range silently admitted nothing. No test caught it because the
+examples all pin exact versions, which the regular expression happened to get right.
+
+It also made `deploy-order` impossible to state. That check distinguishes a pin from a range,
+and its remedy is *"write `accepts v1.x` instead"* — advice the checker could not itself
+recognise, and which the first draft of the message printed without the `v`, in a form the
+grammar does not accept.
+
+`admits` is shared rather than duplicated because the two callers ask the same question of the
+same clause from opposite sides: the checker asks whether a producer could emit something this
+consumer rejects, and a runtime asks whether this subscription should see this message. Two
+implementations of one predicate is how `version-mismatch` and a runtime would come to
+disagree about a deployment being safe.
+
+---
+
+## D85 — Three findings the examples asserted and nothing verified
+
+Implementing the batch turned up three things in the published examples. Recorded because the
+pattern is now the most reliable one in this project: every comment claiming *"what the
+checker reports: none"* is a claim worth distrusting until a check exists.
+
+**`sales.7k`'s `OrderPlaced` had no `@role(businessKey)`**, while the file's own comment said
+every role was claimed. Invisible because nothing consumes `OrderPlaced`, so no subscription
+existed for `missing-dedupe-key` to flag. Fixed.
+
+**`external-bound` is not implementable today.** The code asks whether an implementation was
+told to generate an `@external` service, and nothing in the language describes a binding for
+it to be told in. `sales.7k` claimed it passed; the comment now says there is no check. It
+belongs with the provider work, not with the checker.
+
+**A dead `@command` emit hid in this project's own test model.** `Unship` was emitted, had a
+consumer, and nothing ever sent it — so `orphan-message` could not see it and only
+`unexplained-emit` could. It was in a file written three hours earlier to test the saga
+analyses.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.

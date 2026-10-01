@@ -11,7 +11,7 @@ envelopes common.Trace, common.Tenancy
 // ---------------------------------------------------------------- messages
 
 message OrderPlaced v1.1 @event {
-  orderId: common.OrderRef
+  orderId: common.OrderRef @role(businessKey)
   buyer:   common.Buyer
   seats:   [common.SeatPrice] { size 1..20 }
   total:   common.Money
@@ -90,20 +90,32 @@ service WebApp @external {
 //                      no modelled consumer. Real, not noise: the analysis is
 //                      asking where these events go.
 //   package-cycle      none - acme.sales depends on acme.ticketing, not back.
-//   unclaimed-role     none - correlation, causation, partitionKey, subject and
-//                      businessKey are all claimed.
+//   unclaimed-role     none - correlation, causation, partitionKey and subject come
+//                      from the common envelopes, and businessKey from each message.
+//                      OrderPlaced was missing it until the check was implemented,
+//                      which is the whole argument for implementing checks.
 //   ordering-defeated  none - every subscription inherits `by tenantId` from its
 //                      pipe, and `reconcile` narrows to serial rather than
 //                      widening.
+//   unexplained-emit   TWO, and both real: OrderService emits ticketing.ReserveSeats
+//                      and ticketing.ReleaseSeats, and nothing here says what makes
+//                      it. This package has no saga, so the flow is choreography the
+//                      model implies rather than states - shop.7k is the same shape
+//                      written down. Events are not checked: a service publishing a
+//                      fact about its own work is internals (03-topology.md 2.0).
 //   command-on-topic   none - the two @command messages are on a queue, every
 //                      @event is on a topic.
 //   case-collision     none.
-//   deploy-order       KioskBridge accepts TicketIssued v1.0 exactly. A future
-//                      v1.1 would require KioskBridge to deploy first.
+//   deploy-order       ONE: KioskBridge accepts TicketIssued at exactly v1.0, so a
+//                      future v1.1 requires KioskBridge to deploy first. The check
+//                      names `accepts v1.x` as the way to remove the constraint.
 //   pipe labels        events is pii-bearing (OrderPlaced -> Buyer ->
 //                      Address @pii), so an implementation must encrypt it at rest.
-//   external-bound     WebApp and PrintGateway are @external, so an implementation
-//                      generate them - only their contracts are checked.
+//   external-bound     not checkable here. The code asks whether an implementation
+//                      was told to generate an @external service, and nothing in the
+//                      language yet describes a binding for it to be told in. WebApp
+//                      and PrintGateway are @external; only their contracts are
+//                      checked, and no check enforces that today.
 //   boundary pipes     events (WebApp emits) and ticketing.print
 //                      (PrintGateway consumes). Both project JSON Schema in
 //                      `strict` mode; the purely internal pipes stay tolerant.
