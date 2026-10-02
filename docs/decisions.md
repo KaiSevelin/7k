@@ -2444,15 +2444,97 @@ specification's table rather than from the implementation.
 
 ---
 
+## D91 — A message field may be a dictionary, understood as an extension point
+
+`map<K, V>` stays in the kernel, and a message field may be one.
+
+**Why, and what the concern actually was:** the open question recorded that `map` "complicates schema
+evolution and code generation", and only the first half is real. A dictionary is a dictionary in every
+target language; codegen was never the problem. Schema evolution is: a `map` has no declared keys, so
+**adding one triggers no version bump** and routes straight around `version-classification`. That makes
+it an unversioned extension point.
+
+Which is the right answer when that is what you mean. If the keys matter, they should be fields — and
+then a change to them is classified, projected and checked. If the keys genuinely do not matter, a bag
+of user-defined tags or labels, then the absence of a contract over them is the point, and forcing a
+record would be describing a shape that does not exist.
+
+So: kept, with the understanding written down. It projects to `additionalProperties` with no loss (D90),
+it sees no use in the three example packages, and removing a kernel type to tidy away a hypothetical
+would cost more than leaving it.
+
+---
+
+## D92 — Spider: a local web app, read-only first, in its own repository
+
+Four decisions about the tool, taken before any of it was built.
+
+**A local web app, served by a command; a VS Code webview later.** Spider is "how you look at and
+exercise a model", and D25's framing of a trace as a *shareable bug report* points past the author's
+editor — a reviewer looking at a flow or a colleague opening a trace is not necessarily in VS Code.
+A browser is also where a graph, a sequence diagram and a timeline are cheapest to draw well. The
+webview's real advantages — workspace access, file watching, writing files — only start to matter once
+Spider edits, which is the next decision. So the renderer goes in a package that knows nothing about its
+host, and a webview hosts the same bundle when it is wanted.
+
+**Read-only first.** The authoring experience already exists in the extension (D67). A Spider that draws
+the model and replays a trace is useful on its own and defers the whole no-unsaved-buffer, file-watcher,
+surgical-mutation problem — which is both the riskiest part and the one most likely to consume the
+schedule. Mutation becomes the fifth increment rather than the first.
+
+**Its own repository**, like the sandbox and the extension. Unlike `packages/project` it is not a pure
+function of the IR: it has a rendering dependency, a UI lifecycle and a release cadence of its own.
+
+**Deterministic layered layout, drawn by Cytoscape.js.** D25 says stability matters more than
+optimality, which disqualifies force-directed layout outright — reshuffling on every model change is the
+named failure, not a side effect. Layered, seeded by declaration order, with `layout.json` overriding and
+a missing node laid out on its own rather than by re-running the view.
+
+The layout comes from **ELK**, through `cytoscape-elk` rather than Cytoscape's own layouts, so that the
+determinism requirement stays a decision here and not a library's. Two costs are accepted knowingly, both
+from Cytoscape rendering to a canvas with a stylesheet rather than composing nodes from components:
+
+- **There is no port concept**, so boundary ports are child nodes positioned on a parent's perimeter.
+  Planned for from the start rather than discovered at the first increment.
+- **Node affordances are styled, not composed**, so an incompleteness badge or a `pii` marker is a
+  generated image rather than markup. It costs nothing for the first increment, which is boxes and
+  labels, and something later.
+
+Chosen over the alternative (ELK with React Flow, which has first-class ports and component nodes)
+because familiarity with a graph library outweighs both, and because neither cost touches the two hard
+parts of a read-only Spider: layout determinism and the sidecar round-trip.
+
+### What made this cheap to decide
+
+**Core runs in a browser.** There are no `node:` imports anywhere in `packages/core/src` — `buildWorkspace`
+takes sources as strings — so Spider lexes, parses, links and analyses client-side. The IR serialisation
+format this plan would otherwise have needed does not have to exist, and Spider's view of a model is the
+same view the checker has rather than a copy that can drift.
+
+### Where things are written down
+
+A Spider design document belongs in the Spider repository, not in `docs/spec/`: `00-overview.md` puts
+Spider outside the language, and `docs/spec/` holds the language and the one sibling specification that
+conformance requires. An earlier plan to add `40-spider.md` was wrong by the project's own test.
+
+The **sidecar formats** are a different matter and do belong there, beside `views.json`. `20-ir.md` named
+`layout.json` and `forms.json` in its file list and specified neither, so both now have a section (6.2,
+6.3) and an example beside the others. Two rules in them are worth repeating because they are the ones a
+first implementation gets wrong:
+
+- A missing node in `layout.json` falls back to auto-layout **for that node**, not for the view. Adding
+  a service places the new one and leaves the rest alone. Re-running layout for the whole view is the
+  graph that stops being trusted.
+- `forms.json` carries **no validation hints, ever**. Constraints belong to the model, and a second copy
+  in a presentation file is a second source of truth that drifts.
+
+---
+
 ## Open questions
 
-Two remain. All others are resolved — see the decisions named.
+One remains. All others are resolved — see the decisions named.
 
-1. **`map` in messages** — kept in the kernel, but it complicates schema evolution and code generation.
-   Reconsider if it sees little use.
-2. **Parameterized values** (`PostCode<SE>`). Deferred as a complexity cliff; the family approach
-   (`SwedishPostCode`, `UKPostCode`) is the current answer.
-3. **A projection beyond JSON Schema.** Avro, protobuf and OpenAPI are named in section 6 and only
+1. **A projection beyond JSON Schema.** Avro, protobuf and OpenAPI are named in section 6 and only
    JSON Schema is implemented (D90), deliberately. The interface is ready for a second — a projection
    returns artifacts and produces its own loss profile — but none of the three has a reason yet that
    the first does not already serve. Revisit when a binding needs one, not before.
@@ -2464,6 +2546,9 @@ Two remain. All others are resolved — see the decisions named.
 | Upcasts declared and never applied | D88 — applied on receipt, chained, with a scenario pinning the version |
 | Invariants declared and never checked | D89 — evaluated on receipt, per record and per element |
 | Projections specified and unimplemented | D90 — JSON Schema 2020-12 in `packages/project`, written by `7k project` |
+| `map` in messages | D91 — kept, and understood as an unversioned extension point |
+| Parameterized values | D91's neighbour: declined. The family approach (`SwedishPostCode`) stands |
+| `layout.json` and `forms.json` named and unspecified | D92 — `20-ir.md` 6.2 and 6.3, with examples |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |

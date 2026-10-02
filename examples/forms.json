@@ -1,0 +1,19 @@
+{
+  "_comment": "Lives at .7k/forms.json. Composer hints only: the widgets come from kernel types and constraints, which is what makes the composer work for a value it has never seen (D24). Everything here is an override, and deleting the file changes nothing but the labels. See ../docs/spec/20-ir.md section 6.3.",
+
+  "record:acme.retail.common.Address": {
+    "order": ["street", "postCode", "city", "country"],
+    "fields": {
+      "postCode": { "label": "Post code" },
+      "country": { "widget": "select" },
+      "region": { "label": "Region or state" }
+    }
+  },
+
+  "message:acme.retail.ticketing.ReserveSeats": {
+    "order": ["orderId", "seats"],
+    "fields": {
+      "reservationId": { "label": "Reservation (generated)" }
+    }
+  }
+}
