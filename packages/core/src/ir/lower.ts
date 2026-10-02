@@ -23,7 +23,7 @@ import type { Span } from "../diagnostics.js";
 import type { Token } from "../token.js";
 import { parseDuration } from "../literals.js";
 import { parseAccepts } from "./version.js";
-import { lowerPredicate } from "./predicate.js";
+import { lowerPredicate, pathSegmentsOf, type Predicate } from "./predicate.js";
 import {
   type SagaIr,
   RETRY_DEFAULT,
@@ -229,6 +229,19 @@ function lowerField(ctx: Ctx, n: CstNode): FieldIr {
 const fieldsOf = (ctx: Ctx, body: CstNode | undefined): FieldIr[] =>
   body === undefined ? [] : childNodes(body, "Field").map((f) => lowerField(ctx, f));
 
+/**
+ * The invariants a record or message body declares.
+ *
+ * Lowered rather than dropped, which it was: the parser read the predicate, the IR had nowhere
+ * to put it, and so a declared contract rule was enforced by nothing at all.
+ */
+const invariantsOf = (ctx: Ctx, body: CstNode | undefined): Predicate[] =>
+  body === undefined
+    ? []
+    : childNodes(body, "InvariantStmt").map((n) =>
+        lowerPredicate(childNodes(n, "Predicate")[0], ctx.file),
+      );
+
 const includesOf = (ctx: Ctx, body: CstNode | undefined): Ref[] => {
   if (body === undefined) return [];
   return childNodes(body, "IncludeStmt").flatMap((inc) =>
@@ -386,6 +399,7 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
         id: id(kind),
         fields: fieldsOf(ctx, body),
         includes: includesOf(ctx, body),
+        invariants: invariantsOf(ctx, body),
       };
     }
 
@@ -409,6 +423,7 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
         visibility,
         fields: fieldsOf(ctx, body),
         includes: includesOf(ctx, body),
+        invariants: invariantsOf(ctx, body),
       };
       return msg;
     }
@@ -678,10 +693,8 @@ const literalValue = (t: Token): string | number | boolean => {
   return t.keyword === "true";
 };
 
-const pathSegments = (n: CstNode): string[] =>
-  childTokens(n)
-    .filter((t) => t.kind === "ident")
-    .map((t) => t.text);
+/** The same reader a predicate uses, so a projection means one thing in both. */
+const pathSegments = pathSegmentsOf;
 
 const assignsIn = (ctx: Ctx, n: CstNode | undefined): AssignIr[] =>
   n === undefined

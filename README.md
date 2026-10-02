@@ -342,7 +342,7 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 458 tests
+npm test            # 462 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 

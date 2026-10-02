@@ -133,6 +133,14 @@ export interface RecordIr extends DeclBase {
   readonly kind: "record" | "envelope";
   readonly fields: readonly FieldIr[];
   readonly includes: readonly Ref[];
+  /**
+   * Contract rules over this record's own data (`02-contract.md` section 3).
+   *
+   * A bare path reads the record itself, `envelope.` its envelope and `message.` the body it
+   * sits in — so an invariant on a nested record can relate an element to the whole. Envelopes
+   * declare none: there is nothing for one to be a rule *about* that a field could not say.
+   */
+  readonly invariants: readonly Predicate[];
 }
 
 export type Visibility =
@@ -146,6 +154,8 @@ export interface MessageIr extends DeclBase {
   readonly visibility: Visibility;
   readonly fields: readonly FieldIr[];
   readonly includes: readonly Ref[];
+  /** Contract rules over the message's own data (`02-contract.md` section 3). */
+  readonly invariants: readonly Predicate[];
 }
 
 /**

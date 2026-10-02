@@ -43,21 +43,42 @@ export type Predicate =
 const COMPARE: readonly string[] = ["==", "!=", "<", "<=", ">", ">="];
 
 /**
- * `[]` is a projection meaning "for every element", kept in the path so an
- * evaluator can see where it applies. `.size` on a list reads its length.
+ * Reads a `Path` node's segments.
+ *
+ * `[]` is a projection meaning "for every element", kept in the path so an evaluator can see
+ * where it applies. `.size` on a list reads its length.
+ *
+ * The brackets arrive as **two** punctuation tokens, because that is what the parser pushes.
+ * Looking for a single `"[]"` token found nothing, so every projection was silently dropped:
+ * `lines[].unit.currency` became `lines.unit.currency`, which reads nothing on a list, so the
+ * comparison was false and the invariant it belonged to could never hold.
  */
-const pathOf = (n: CstNode): string[] => {
+export const pathSegmentsOf = (n: CstNode): string[] => {
   const out: string[] = [];
+  let open = false;
+
   for (const c of n.children) {
     if (!isToken(c)) continue;
     if (c.text === "[]") {
       out.push("[]");
       continue;
     }
+    if (c.text === "[") {
+      open = true;
+      continue;
+    }
+    if (c.text === "]") {
+      if (open) out.push("[]");
+      open = false;
+      continue;
+    }
     if (c.kind === "ident") out.push(c.text);
   }
+
   return out;
 };
+
+const pathOf = pathSegmentsOf;
 
 const literalOf = (tok: { kind: string; text: string; keyword?: string }): JsonValue => {
   switch (tok.kind) {

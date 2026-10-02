@@ -179,6 +179,15 @@ record Ticket { include Audit; ref: TicketRef }
 `or` and `not`. There is no arithmetic and there are no function calls. If an invariant cannot be
 expressed this way, it is business logic and belongs in the service, not in the contract.
 
+A rule is evaluated on receipt, after the fields themselves check out — a rule over a value that is
+already the wrong shape would report a second failure for one cause. One on a nested record is
+checked for **each element**, so a bad line names itself. A projection distributes from either side:
+`total.currency == lines[].unit.currency` and its mirror mean the same thing.
+
+**A generator cannot satisfy an invariant**, and a fixture should not ask it to. `$auto` produces each
+field independently and has no way to honour a relation between two of them, so a payload that leaves
+both sides of a rule generated will be refused. Write the related fields.
+
 ## 4. Envelopes
 
 > **An envelope carries metadata that rides alongside a message. A record carries the message body.**

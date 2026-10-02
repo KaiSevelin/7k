@@ -241,8 +241,12 @@ scenario OldOrderPlacedUpcasts {
   at 0s publish OrderPlaced v1.0 as WebApp {
     orderId: "ORD-10500",
     buyer:   "$auto",
-    seats:   { $repeat: 2, of: "$auto" },
-    total:   "$auto"
+    // The currency is written rather than generated, on both sides: OrderPlaced's
+    // `invariant total.currency == seats[].price.currency` relates two fields, and
+    // independent generation cannot honour a relation it knows nothing about.
+    seats:   { $repeat: 2, of: { event: "EV-9", seat: "$auto",
+                                 price: { amount: "120.0000", currency: "SEK" } } },
+    total:   { amount: "240.0000", currency: "SEK" }
   }
 
   advance 1s

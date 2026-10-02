@@ -11,6 +11,7 @@ import {
   admits,
   parseAccepts,
   showAccepts,
+  showPredicate,
 } from "../src/index.js";
 
 const ws = (...files: readonly [string, string][]): Workspace =>
@@ -628,5 +629,69 @@ service S {
     const service = w.model.decls.find((d) => d.kind === "service");
     if (service?.kind !== "service") throw new Error("expected a service");
     expect(service.reacts[0]?.accepts).toEqual({ k: "major", major: 1 });
+  });
+});
+
+describe("invariants", () => {
+  const INV = `package p
+
+value Code : string { length 3 }
+
+record Money {
+  amount:   decimal(18,2)
+  currency: Code
+}
+
+record Line {
+  unit:  Money
+  total: Money
+  invariant total.currency == unit.currency
+}
+
+message Order v1.0 @command {
+  k:     uuid @role(businessKey)
+  lines: [Line] { size 1..4 }
+  total: Money
+  invariant total.currency == lines[].unit.currency
+  invariant not total.amount == 0
+}
+
+envelope Meta {
+  correlationId: uuid @role(correlation)
+}
+`;
+
+  const built = (): Workspace => {
+    const w = ws(["m.7k", INV]);
+    expect(codes(w, "error")).toEqual([]);
+    return w;
+  };
+
+  it("keeps a record's own rule, which the lowering used to drop", () => {
+    const line = decl<import("../src/index.js").RecordIr>(built(), "Line");
+    expect(line.invariants).toHaveLength(1);
+    expect(showPredicate(line.invariants[0]!)).toBe("total.currency == unit.currency");
+  });
+
+  it("keeps every rule a message declares", () => {
+    const order = decl<import("../src/index.js").MessageIr>(built(), "Order");
+    expect(order.invariants.map(showPredicate)).toEqual([
+      "total.currency == lines.[].unit.currency",
+      "not total.amount == 0",
+    ]);
+  });
+
+  it("keeps the `[]` projection in the path", () => {
+    // The brackets arrive as two punctuation tokens, so looking for one `[]` token found nothing
+    // and every projection was silently dropped — leaving a path that reads nothing on a list.
+    const order = decl<import("../src/index.js").MessageIr>(built(), "Order");
+    const [first] = order.invariants;
+    if (first?.p !== "cmp") throw new Error("expected a comparison");
+    expect(first.right).toEqual({ k: "field", path: ["lines", "[]", "unit", "currency"] });
+  });
+
+  it("gives an envelope none, since it may not declare any", () => {
+    const meta = decl<import("../src/index.js").RecordIr>(built(), "Meta");
+    expect(meta.invariants).toEqual([]);
   });
 });

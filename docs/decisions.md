@@ -2329,6 +2329,45 @@ to translate for.
 
 ---
 
+## D89 — Invariants are enforced, and a projection distributes from either side
+
+A record's or a message's `invariant` is evaluated on receipt, after its fields check out. One on a
+nested record is checked per element. A projection distributes from whichever side it appears on.
+
+**Why it had to be done:** the parser read the predicate and the IR had nowhere to put it, so a
+declared contract rule was enforced by nothing at all — in Core, in the sandbox, anywhere. The
+examples carried `invariant total.currency == lines[].unit.currency` and every fixture violating it
+passed.
+
+Three bugs surfaced on the way, and all three had been invisible for the same reason: nothing read
+the thing they broke.
+
+**Every `[]` projection was dropped from every path.** The parser pushes `[` and `]` as two
+punctuation tokens; the lowering looked for a single `"[]"` token and found none. So
+`lines[].unit.currency` lowered as `lines.unit.currency`, which reads nothing on a list. That
+affected `where` and `requires` as much as `invariant` — any predicate over a collection was false.
+There are now two readers no longer: one path reader, shared.
+
+**The evaluator only distributed a projection on the left.** `total.currency ==
+lines[].unit.currency` compared a string against an array and was false; written the other way round
+it worked. Both forms are natural and the specification's own example is the one that failed.
+
+**An absent operand looked exactly like a broken contract.** A comparison with a missing side is
+false by design (D84's cousin), so a typo in an invariant's path would fail every message forever
+while reporting that the *rule* did not hold. A path that reads nothing is now reported as that.
+
+### What enforcing them found
+
+**Four example fixtures were violating a declared rule.** `$auto` generates each field independently
+and cannot honour a relation between two of them, so `lines: { $repeat: 1, of: "$auto" }, total:
+"$auto"` produced two different currencies. The composer refusing it is the honest outcome, and the
+fixtures now write the currency on both sides. Worth stating in the spec, because the instinct is to
+generate everything: a payload with a cross-field rule has to write the fields that rule relates.
+
+**One of them was mine, from an hour earlier.** The upcast scenario added in D88 had the same shape.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.
@@ -2337,18 +2376,18 @@ Two remain. All others are resolved — see the decisions named.
    Reconsider if it sees little use.
 2. **Parameterized values** (`PostCode<SE>`). Deferred as a complexity cliff; the family approach
    (`SwedishPostCode`, `UKPostCode`) is the current answer.
-3. **Invariants are declared and never checked.** `message OrderPlaced` carries
-   `invariant total.currency == lines[].unit.currency`, the parser reads it, and the IR drops it: a
-   `MessageIr` has fields and includes and no invariants. So nothing validates one, in Core or in a
-   runtime, and a generated fixture happily produces a total in one currency and lines in another.
-   Smaller than it sounds — the predicate machinery already exists — but it is a declared constraint
-   that silently does nothing, which is worse than one that does not exist.
+3. **Projections** (`02-contract.md` section 6) — a lossy export into JSON Schema, Avro, protobuf or
+   OpenAPI, each with a documented loss profile. Specified in detail, including the loss table, and
+   unimplemented. Additive rather than corrective, and the one remaining item that wants a design
+   conversation first: which languages, what a loss profile looks like as an artifact, where the
+   output goes, and whether it belongs in Core or beside it.
 
 ### Resolved
 
 | Was | Resolved by |
 |---|---|
 | Upcasts declared and never applied | D88 — applied on receipt, chained, with a scenario pinning the version |
+| Invariants declared and never checked | D89 — evaluated on receipt, per record and per element |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |
