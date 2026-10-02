@@ -58,6 +58,7 @@ export {
 } from "./parser/index.js";
 export * from "./ir/index.js";
 export * from "./contract/index.js";
+export * from "./mutate/index.js";
 export {
   TRACE_FIELD_ORDER,
   TRACE_KINDS,

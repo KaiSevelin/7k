@@ -2772,6 +2772,80 @@ against Core means the composer is as strict as the checker, which is the only u
 
 ---
 
+## D98 — The mutation API, and why its two hardest properties are free
+
+`20-ir.md` section 7 specified this API before anything needed it, and it specified it in the right place:
+"Spider edits through this. So does any CLI refactor command and any future LSP code action — **one
+implementation, three front ends**." So it is in Core, in `src/mutate/`, and a front end gets edits and
+diagnostics rather than a changed file.
+
+Implemented: `connectEmit`, `connectReact`, `disconnectEmit`, `disconnectReact`, `addService`, `addPipe`.
+The ones a graph editor needs to wire things up, which are also the local ones — an insertion before a
+closing brace, the removal of one clause, an append to a package's file. **Nothing rewrites text it did
+not write.**
+
+### The two properties that decide whether anyone trusts it
+
+Section 7.2 asks for four property tests from the first commit and flags the second as "the one that
+decides whether people keep using the graph editor":
+
+> **Every byte outside the mutated span is unchanged.** Comments, ordering and formatting survive.
+
+That property is **true by construction**, not by care. An edit is a byte range and a replacement;
+applying one splices. There is no path through the module that re-serializes, so there is nowhere for a
+reformatting to come from. The tests assert it over every operation anyway, by rebuilding the expected
+output from the original text and the edit ranges — if that matches, the only bytes that differ are inside
+the ranges, because there is nowhere else for a difference to hide.
+
+Property 3 — "`apply(op)` then `apply(inverse(op))` yields byte-identical text" — fell out the same way.
+The inverse of replacing a range with some text is replacing what that text now occupies with what was
+there before, which is computable from the source and the edits. So **`invert` is mechanical and
+per-operation inverses do not exist**: every operation is invertible, including ones not yet written, and
+an undo stack is a stack of edits rather than a dirty buffer (section 7.1).
+
+Property 4 belongs to the formatter, which this module does not touch — by construction again.
+
+### What the API had to learn that the specification did not say
+
+**A reference must be written the way its file would write it.** `referenceTo` answers "how do I name this
+from inside that package": bare in its own, through an import's alias — or its last segment, which is what
+an unaliased import is referred to by — from another, and fully qualified as a last resort **with a
+diagnostic**, because a reference needing an import the file does not have is an edit that would not check
+out. The edit is still offered, since the caller may be about to add the import; it is simply never offered
+silently.
+
+**Indentation is read, not chosen.** A file that indents with four spaces should not gain a line indented
+with two.
+
+**"Already connected" is an answer, not a failure.** A graph editor will ask for an edge that exists, and
+the honest reply is `info` with no edits rather than an error. The same for "not connected" on a
+disconnect.
+
+**A removal takes its line.** Removing only a clause's own span leaves a blank, indented line behind — and
+leaves the comment above it, which was never part of the clause, exactly where it was.
+
+### What is deliberately not here
+
+**`rename`** updates references across every file *and the sidecars, atomically*. The references are the
+easy half. The sidecars are the half that matters: `layout.json` and `views.json` key on a declaration's
+name (6.2, 6.1), so a rename that missed them would silently discard every saved position and every lens
+entry naming the old one. Section 6.4 already requires that it not, and that wants doing properly rather
+than soon.
+
+**`moveToPackage`** is, in the specification's own words, "the largest structural mutation in the API, the
+only one that moves text between files, and the only one that can change a message's wire type — so it
+reports that consequence before applying". A mutation that can change what is on the wire is not the
+second thing to build.
+
+### One thing the specification had already settled that I had not read
+
+Section 7.1 answers the unsaved-buffer problem outright: **"Spider has no unsaved buffer. Every mutation
+writes the file immediately, and a file watcher reloads on external change. That one rule eliminates the
+entire class of conflicts."** D92 had listed that conflict as one of the three reasons to defer mutation,
+and Spider's own design document had repeated it as an open question. It was answered here all along.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -2796,6 +2870,7 @@ One remains. All others are resolved — see the decisions named.
 | Labels specified to propagate and never computed | D95 — `ir/labels.ts`, field to record to message to pipe |
 | Annotation placement undocumented and inconsistent | D96 — after the name on every declaration, and in the grammar |
 | Predicate and payload semantics in a runtime | D97 — `core/src/contract/`, with the sandbox's 162 tests as the gate |
+| The mutation API specified and unimplemented | D98 — `core/src/mutate/`, with section 7.2's properties true by construction |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |
