@@ -16,6 +16,7 @@ import { childNodes, childTokens, isNode, isToken, type CstNode } from "../cst.j
 import type { Diagnostic, Span } from "../diagnostics.js";
 import { jsonValue, parseDuration, type JsonValue } from "../literals.js";
 import { lowerPredicate, type Predicate } from "./predicate.js";
+import { TRACE_REASONS, isTraceReason, type TraceReason } from "../trace.js";
 
 // ---- outcomes ---------------------------------------------------------------
 
@@ -108,7 +109,7 @@ export type Expect =
       readonly e: "rejected";
       readonly message: string;
       readonly service?: string;
-      readonly reason?: string;
+      readonly reason?: TraceReason;
       readonly span: Span;
     }
   | {
@@ -193,6 +194,26 @@ export function lowerScenarioFile(root: CstNode, file: string): {
 } {
   const diagnostics: Diagnostic[] = [];
   const span = (n: CstNode): Span => ({ file, start: n.start, end: n.end });
+
+  /**
+   * A reason, checked against the closed set the trace format defines (`30-scenarios.md` 7.4).
+   *
+   * It used to be lowered as whatever identifier was written, so `reason unathorized` produced a
+   * scenario that could never match and a failure report that blamed the model. A typo is a mistake
+   * in the scenario, and the scenario is where it should be reported.
+   */
+  const reasonOf = (text: string, at: CstNode): TraceReason | undefined => {
+    if (isTraceReason(text)) return text;
+    diagnostics.push({
+      code: "unknown-reason",
+      severity: "error",
+      message:
+        `\`${text}\` is not a reason a runtime can report. ` +
+        `One of: ${TRACE_REASONS.join(", ")}`,
+      span: span(at),
+    });
+    return undefined;
+  };
 
   const duration = (text: string | undefined, at: CstNode, what: string): number => {
     if (text === undefined) {
@@ -368,11 +389,14 @@ export function lowerScenarioFile(root: CstNode, file: string): {
 
     if (words.includes("rejected")) {
       const serviceName = childNodes(n, "QName")[0];
+      // An unknown reason is reported and dropped, so the rest of the expectation still runs: a
+      // half-written scenario is as normal as a half-written model (D20).
+      const reason = idents[0] === undefined ? undefined : reasonOf(idents[0].text, n);
       return {
         e: "rejected",
         message: refIn(n, "MsgRef") ?? "",
         ...(serviceName !== undefined ? { service: flat(serviceName) } : {}),
-        ...(idents[0] !== undefined ? { reason: idents[0].text } : {}),
+        ...(reason !== undefined ? { reason } : {}),
         span: at,
       };
     }

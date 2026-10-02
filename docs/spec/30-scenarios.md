@@ -249,13 +249,207 @@ keyword.
 
 ## 7. Traces
 
-A runtime emits a **trace**: NDJSON, one envelope event per line, in canonical JSON form
-(`01-kernel.md` section 7). It is the third of 7K's published interchange artifacts, alongside the IR and
-canonical JSON itself.
+A runtime emits a **trace**: NDJSON, one event per line. It is the third of 7K's published interchange
+artifacts, alongside the IR and canonical JSON itself.
 
 Specifying it is what lets a tool consume any runtime's output: Spider never talks to the sandbox directly, a
 trace file is a shareable bug report, and a converter from OpenTelemetry spans can point the same views at
 production.
+
+None of that survives two producers disagreeing about what a field means, so the contract is **defined in
+code**, in `@sevenk/core`'s `trace.ts`, and this section describes what is there. A writer and a reader import
+the same definition; `validateTrace` checks a trace against every rule below, and `examples/trace.ndjson` is a
+fixture covering every event kind. The sets here are closed, and adding to one is a change to this section.
+
+> An earlier version of this section said only the paragraphs above and left everything else to be inferred
+> from whichever producer a tool happened to read. Spider was written against the sandbox's TypeScript — the
+> one place this section says a tool must not look — which is how the gaps below were found (D93).
+
+### 7.1 Encoding
+
+One event per line, each a strict JSON object. A `body` or `envelope` value is canonical JSON
+(`01-kernel.md` section 7), so a `decimal` is a string and an absent field has its key omitted rather than a
+`null`. The event object itself is **not** a canonically encoded message: it is a trace event that carries
+one.
+
+A reader skips blank lines and `//` comments, because a hand-edited fixture is a hand-written source
+(`01-kernel.md` 7.4). A writer emits neither.
+
+A line that is not an event is **reported, not fatal**. A trace arrives as a tail, a paste, or several runs
+concatenated, and refusing to open a bug report because its last line is half-written would be the wrong
+trade.
+
+### 7.2 Identity
+
+Four fields are on every event.
+
+| Field | Meaning |
+|---|---|
+| `run` | The run that produced it. |
+| `seq` | Dense, 0-based within its run, in emission order. |
+| `at` | Epoch milliseconds on the clock — virtual in a scenario, real in production. |
+| `kind` | One of 7.4. |
+
+**An event's identity is `(run, seq)`, not `seq`.** `seq` restarts at 0 for each run, so a file holding two
+runs has two events numbered 0 — which the sandbox's own `--ndjson` across several scenarios produces. A
+consumer that keyed on `seq` alone would silently merge them.
+
+`run` SHOULD carry enough to reproduce the run. The sandbox writes `<scenario>#<seed>`, which is the whole of
+what a failure is: a model plus a number.
+
+Two ordering rules, both checked:
+
+- **`seq` is dense within a run.** A gap means events were dropped, and a consumer is entitled to say so
+  rather than draw a sequence diagram with a hole in it.
+- **`at` never goes backwards within a run.** Many events share an instant, because a virtual clock does not
+  advance while there is work due now, and `seq` is the only thing that orders those.
+
+Events of one run are contiguous; two runs are not interleaved by clock, because two runs' clocks are not the
+same clock.
+
+**Fields are written in a fixed order** (`TRACE_FIELD_ORDER`), so two runs of one scenario produce
+byte-identical files. That is what lets a trace be diffed, and diffing two traces is how you see what a change
+did. Insertion order would make the bytes depend on which branch of a runtime built the object.
+
+### 7.3 The event
+
+Everything beyond the four above depends on the kind. 7.4 says which are required for each.
+
+| Field | Type | Notes |
+|---|---|---|
+| `iso` | string | `at` as RFC 3339 UTC, millisecond precision. **Advisory**, and must agree with `at` |
+| `message` | string | the message's **qualified** type — also its wire type |
+| `pipe` | string | **qualified**; a dead-letter companion is `<pipe>.dead` |
+| `service` | string | **qualified** |
+| `subscription` | string | the subscription's name (`03-topology.md` 2.4), which defaults to its service's bare name |
+| `id` | string | the envelope's per-send id. Not the business key, and not the correlation id |
+| `attempt` | int | 1-based delivery attempt |
+| `reason` | string | one of 7.5 |
+| `detail` | string | prose for a human. **Never matched on** |
+| `envelope` | object | the declared envelope records, canonically encoded |
+| `body` | object | the message's own fields, canonically encoded |
+| `claims` | object | the claims the sender presented |
+| `saga` | string | **qualified** |
+| `sagaKey` | string | the instance key, which is not the correlation id (`04-process.md` 1.1) |
+| `schedule` | string | **qualified** |
+
+`iso` duplicates `at`, which is a second source of truth and would normally be refused. It survives because a
+trace is read by people as often as by tools, and the duplication is made safe by being checked rather than
+trusted: a disagreement between `iso` and `at` is a reported violation.
+
+### 7.4 Kinds
+
+Closed. A scenario matches on these and a consumer renders them; an open set would make both a guess.
+
+**Delivery.**
+
+| Kind | Also carries | Means |
+|---|---|---|
+| `published` | `message` `pipe` `id` `envelope` `body` | put on a pipe. `service` too, unless the scenario published it itself |
+| `delivered` | `message` `pipe` `service` `subscription` `id` `attempt` | handed to a handler |
+| `filtered` | `message` `pipe` `service` `subscription` `id` `reason` | a `where` filter declined it. Never retried, never dead-lettered |
+| `deduplicated` | `message` `pipe` `service` `subscription` `id` `reason` | the `once per` key was already seen |
+| `handled` | `message` `pipe` `service` `subscription` `id` | the handler ran and returned |
+| `rejected` | `message` `pipe` `service` `subscription` `id` `reason` | refused before the handler. Never retried |
+| `failed` | `message` `pipe` `service` `subscription` `id` `attempt` `reason` | the handler failed |
+| `retrying` | `message` `pipe` `service` `subscription` `id` `attempt` | another attempt is coming |
+| `dead-lettered` | `message` `pipe` `service` `subscription` `id` `reason` | moved to `<pipe>.dead` |
+| `dropped` | `message` `pipe` `reason` | lost: an `at-most-once` pipe, so there is nowhere for it to go |
+| `upcast` | `message` `pipe` `service` `subscription` `id` `detail` | translated to the version its consumer understands |
+| `advanced` | `detail` | the clock moved |
+
+**Process.** Every one carries `saga` and `sagaKey`.
+
+| Kind | Also carries | Means |
+|---|---|---|
+| `saga-started` | | an instance was created by its start message |
+| `saga-redundant-start` | `message` | a start message arrived for a key that already had an instance |
+| `saga-advanced` | `message` | an awaited message reached the instance and its step's action ran |
+| `saga-timeout` | `detail` | a step waited longer than its declared timeout |
+| `saga-completed` | | |
+| `saga-rejected` | `detail` | |
+| `saga-abandoned` | `detail` | |
+| `saga-compensating` | `message` | a completed step's inverse was sent while unwinding |
+| `saga-irreversible` | `detail` | a completed step declared `undo none`, so unwinding skipped it |
+
+**Time.** Every one carries `schedule` and `message`.
+
+| Kind | Also carries | Means |
+|---|---|---|
+| `schedule-fired` | | an occurrence fired |
+| `schedule-overrun` | `detail` | an occurrence came due while the previous one was still in flight |
+| `schedule-missed` | `detail` | occurrences a gap swallowed, resolved by `onMissed` |
+
+A saga event names no pipe or service. A saga is hosted by a service (`04-process.md` 1.2), but the event is
+about the instance, and a consumer that wants the host reads the model.
+
+### 7.5 Reasons
+
+Why something did not happen. A **stable code, never prose**, because `expect rejected ... reason unauthorized`
+has to match it; the prose goes in `detail`.
+
+| Reason | Means |
+|---|---|
+| `unauthorized` | a `requires` claim check failed |
+| `invalid` | the payload did not satisfy the contract |
+| `timeout` | no answer inside the allowed window: an ack timeout, or a step's `on timeout` |
+| `failed` | the handler itself failed |
+| `duplicate` | the deduplication key had been seen |
+| `filtered` | a `where` filter declined it |
+| `version` | no version the consumer admits, and no upcast path to one |
+| `lossy` | an upcast would have lost information it could not reconstruct |
+| `exhausted` | the retry policy ran out of attempts |
+| `discarded` | an `at-most-once` pipe with nowhere to put it |
+
+Each kind admits only some of them, because `rejected ... reason exhausted` is nonsense — a rejection is never
+retried — and a scenario asserting it should be told so rather than failing to match forever:
+
+| Kind | Admits |
+|---|---|
+| `filtered` | `filtered` |
+| `deduplicated` | `duplicate` |
+| `rejected` | `unauthorized` `invalid` `version` `lossy` |
+| `failed` | `failed` `timeout` |
+| `dead-lettered` | `exhausted` `unauthorized` `invalid` `timeout` `failed` `version` `lossy` |
+| `dropped` | `discarded` |
+
+A scenario naming a reason outside the set is an **error**, reported as `unknown-reason` against the scenario
+rather than as a failure against the model. Before this was checked, `reason unathorized` lowered happily and
+then matched nothing, and the report blamed the system under test.
+
+### 7.6 Names are qualified
+
+`message`, `pipe`, `service`, `saga` and `schedule` are all written **qualified** —
+`acme.retail.sales.OrderService`, not `OrderService`.
+
+`subscription` is the exception, and not an inconsistency: it is a name scoped to its service, so the pair
+identifies it.
+
+The rule exists because the alternative does not work. The sandbox wrote `service` bare while qualifying
+everything else, and two packages may each declare a service of one name — so a consumer had no way to tell
+them apart, and Spider had to resolve a bare name only when exactly one declaration matched and record the
+collision otherwise. Qualifying it removes the ambiguity instead of documenting it.
+
+### 7.7 Unknown fields, and partial producers
+
+**A consumer ignores fields it does not know.** A runtime may record more than this section lists — a broker's
+offset, a span id, a node name — and a tool that rejected the line would make every such runtime unreadable.
+
+**A conforming runtime emits every required field.** A converter from another observability format is a lesser
+producer and will not: an OpenTelemetry span has no `subscription`, and may have no `body`. That output is a
+**partial trace**. `validateTrace` reports what is missing rather than refusing the file, and each consumer
+decides whether it can work without it — the graph can, a replay cannot.
+
+This is the one place the format bends, and it bends deliberately: the alternative is that production traces
+are unreadable by the tools built for scenario traces, which would defeat the reason for publishing a format at
+all.
+
+### 7.8 Conformance
+
+`examples/trace.ndjson` is a fixture covering **every** kind in 7.4, checked in and validated by the test
+suite. It exists because the example scenarios exercise only nineteen of the twenty-four kinds: `filtered`,
+`dropped`, `saga-redundant-start`, `saga-abandoned` and `saga-irreversible` had no coverage anywhere, so
+nothing would have noticed a producer getting them wrong.
 
 ## 8. Vocabulary
 

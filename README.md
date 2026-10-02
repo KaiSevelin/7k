@@ -342,9 +342,10 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 497 tests
+npm test            # 524 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 npm run project     # writes JSON Schema for the examples, into examples/schema
+npm run fixture     # regenerates examples/trace.ndjson, the trace-format fixture
 ```
 
 **What `7k check` finds.** In a model: unresolved names, duplicate and case-colliding declarations,
@@ -388,6 +389,15 @@ of what it could not express:
 7K's checker stays authoritative. The schemas for the examples are checked in under
 [examples/schema/](examples/schema/) and verified by CI, so a constraint change shows up as a schema diff —
 which is where somebody notices a partner's validation getting weaker.
+
+**Reading a trace.** A runtime emits NDJSON, one event per line, specified in
+[30-scenarios.md section 7](docs/spec/30-scenarios.md) and defined in `@sevenk/core` so that a writer and a
+reader import the same contract rather than agreeing twice. `validateTrace` checks a trace against every rule
+in it, and [examples/trace.ndjson](examples/trace.ndjson) is a fixture carrying one event of every kind.
+
+That section used to name the artifact and specify nothing, which is how the sandbox came to write one name
+qualified and another bare, and to restart its sequence numbers per run so that two runs in one file had two
+events numbered 0. Spider found all of it by being the second consumer (D93).
 
 **Looking at a model.** Spider lives in its own repository:
 [KaiSevelin/7k-spider](https://github.com/KaiSevelin/7k-spider). Three views over a model and a trace of it

@@ -25,3 +25,7 @@ jobs:
       # merely agreeing with itself.
       - run: npm run project
       - run: git diff --exit-code -- examples/schema
+      # The trace fixture is generated, so a format change that forgets to regenerate it fails here
+      # rather than in whatever tool reads the output next.
+      - run: npm run fixture
+      - run: git diff --exit-code -- examples/trace.ndjson

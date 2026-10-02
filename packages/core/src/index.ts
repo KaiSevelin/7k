@@ -57,6 +57,25 @@ export {
   type ParseResult,
 } from "./parser/index.js";
 export * from "./ir/index.js";
+export {
+  TRACE_FIELD_ORDER,
+  TRACE_KINDS,
+  TRACE_REASONS,
+  TRACE_REASONS_BY_KIND,
+  TRACE_SHAPE,
+  eventKey,
+  isTraceKind,
+  isTraceReason,
+  readTrace,
+  validateTrace,
+  writeTrace,
+  writeTraceEvent,
+  type ReadTraceResult,
+  type TraceEvent,
+  type TraceKind,
+  type TraceProblem,
+  type TraceReason,
+} from "./trace.js";
 export { buildWorkspace, type Workspace, type WorkspaceInput } from "./workspace.js";
 export {
   describe as describeDecl,

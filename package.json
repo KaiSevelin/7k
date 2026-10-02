@@ -24,7 +24,8 @@
     "test:watch": "vitest",
     "check": "tsx packages/cli/src/index.ts check",
     "typecheck": "tsc --build --force",
-    "project": "tsx packages/cli/src/index.ts project examples --out examples/schema"
+    "project": "tsx packages/cli/src/index.ts project examples --out examples/schema",
+    "fixture": "tsx scripts/fixture.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
