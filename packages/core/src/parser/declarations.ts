@@ -170,20 +170,9 @@ function upcastDecl(c: Cursor, anns: CstNode[]): CstNode {
   parts.push(c.eatKind("version") ?? c.missing("a version"));
   parts.push(c.expectKeyword("to"));
   parts.push(c.eatKind("version") ?? c.missing("a version"));
-  parts.push(
-    body(
-      c,
-      (x) => {
-        if (!x.atKind("ident")) return undefined;
-        const assign: CstChild[] = [path(x), x.expectPunct("=")];
-        if (x.atKeyword("absent")) assign.push(x.advance());
-        else if (x.atKind("ident")) assign.push(path(x));
-        else assign.push(x.advance());
-        return node("Assign", assign);
-      },
-      "an assignment",
-    ),
-  );
+  // The shared assignment parser, not a second one. This body had its own, which read
+  // `message.customer` as a bare two-segment path and so lost the scope entirely.
+  parts.push(assignBody(c));
   return node("UpcastDecl", parts);
 }
 

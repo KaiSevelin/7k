@@ -131,10 +131,20 @@ const annotationsOf = (n: CstNode): { names: string[]; args: Map<string, string>
 
 function ref(ctx: Ctx, n: CstNode | undefined, fallback?: Span): Ref | undefined {
   if (n === undefined) return undefined;
-  const text = joinAll(n).trim();
+  // `msgRef = qname [ version ]`, so a reference may carry one — and the version is not part
+  // of the name. Joining the whole node turned `M v1.0` into `Mv1.0`, which resolved to
+  // nothing; the version is read separately by `versionOn`.
+  const inner = childNodes(n, "QName")[0];
+  const text = joinAll(inner ?? n).trim();
   if (text === "") return undefined;
   return { to: null, text, span: fallback ?? spanOf(ctx.file, n) };
 }
+
+/** The version a reference pins, if it names one: `TicketIssued v1.0`. */
+const versionOn = (n: CstNode | undefined): string | undefined =>
+  n === undefined
+    ? undefined
+    : versionOf(childTokens(n).find((t) => t.kind === "version")?.text);
 
 // ---- types -----------------------------------------------------------------
 
@@ -413,6 +423,9 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
         message: target ?? { to: null, text: "", span },
         ...(versions[0] !== undefined ? { from: versionOf(versions[0].text)! } : {}),
         ...(versions[1] !== undefined ? { to: versionOf(versions[1].text)! } : {}),
+        // What the translation does. Dropped until a runtime needed it, which left an
+        // `upcast` resolving and doing nothing at all.
+        assigns: assignsIn(ctx, childNodes(n, "Body")[0]),
       };
     }
 
@@ -421,11 +434,15 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
 
     case "ServiceDecl": {
       const body = childNodes(n, "Body")[0];
-      const emits: EmitIr[] = (body === undefined ? [] : childNodes(body, "EmitsStmt")).map((e) => ({
-        message: ref(ctx, childNodes(e, "MsgRef")[0]) ?? { to: null, text: "", span },
-        pipe: ref(ctx, childNodes(e, "PipeRef")[0]) ?? { to: null, text: "", span },
-        span: spanOf(ctx.file, e),
-      }));
+      const emits: EmitIr[] = (body === undefined ? [] : childNodes(body, "EmitsStmt")).map((e) => {
+        const pinned = versionOn(childNodes(e, "MsgRef")[0]);
+        return {
+          message: ref(ctx, childNodes(e, "MsgRef")[0]) ?? { to: null, text: "", span },
+          pipe: ref(ctx, childNodes(e, "PipeRef")[0]) ?? { to: null, text: "", span },
+          ...(pinned === undefined ? {} : { version: pinned }),
+          span: spanOf(ctx.file, e),
+        };
+      });
       const reacts = (body === undefined ? [] : childNodes(body, "ReactsStmt")).map((r) =>
         lowerReact(ctx, r, named?.name ?? ""),
       );
@@ -646,11 +663,11 @@ function assignOf(ctx: Ctx, n: CstNode): AssignIr | undefined {
     return { target: pathSegments(target), source: { from: "literal", value: literalValue(literal) }, span };
   }
 
-  // A bare path on the right, which only a half-written assignment produces. Read as
-  // `state`, since that is what an unqualified name means where one is in scope.
+  // An unqualified field path. What it reads depends on the construct, so that is left to
+  // whoever applies it.
   const bare = paths[1];
   if (bare === undefined) return undefined;
-  return { target: pathSegments(target), source: { from: "state", path: pathSegments(bare) }, span };
+  return { target: pathSegments(target), source: { from: "path", path: pathSegments(bare) }, span };
 }
 
 const literalValue = (t: Token): string | number | boolean => {

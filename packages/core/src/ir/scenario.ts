@@ -68,6 +68,14 @@ export interface Mockset {
 
 export interface Publish {
   readonly message: string;
+  /**
+   * The version to send, where the scenario pins one: `publish OrderPlaced v1.0`.
+   *
+   * Absent means the message's own declared version. Naming an older one is how an `upcast`
+   * gets exercised at all — a runtime has to receive a message from a producer that has not
+   * caught up yet, and nothing else in a scenario can arrange that.
+   */
+  readonly version?: string;
   readonly as?: string;
   readonly claims?: JsonValue;
   /** Envelope values the scenario overrides; the rest a runtime supplies (D50). */
@@ -164,7 +172,19 @@ const nameAfterKeyword = (n: CstNode): string => {
 
 const refIn = (n: CstNode, kind: "MsgRef" | "QName" | "PipeRef"): string | undefined => {
   const found = childNodes(n, kind)[0];
-  return found === undefined ? undefined : flat(found);
+  if (found === undefined) return undefined;
+  // `msgRef = qname [ version ]`, and the version is not part of the name: flattening the
+  // whole node turned `M v1.0` into `Mv1.0`, which resolved to nothing.
+  const inner = childNodes(found, "QName")[0];
+  return flat(inner ?? found);
+};
+
+/** The version a reference pins, if it names one: `publish OrderPlaced v1.0`. */
+const versionIn = (n: CstNode, kind: "MsgRef"): string | undefined => {
+  const found = childNodes(n, kind)[0];
+  if (found === undefined) return undefined;
+  const token = childTokens(found).find((t) => t.kind === "version");
+  return token === undefined ? undefined : token.text.replace(/^v/i, "");
 };
 
 export function lowerScenarioFile(root: CstNode, file: string): {
@@ -292,8 +312,11 @@ export function lowerScenarioFile(root: CstNode, file: string): {
       pending = undefined;
     }
 
+    const version = versionIn(n, "MsgRef");
+
     return {
       message: refIn(n, "MsgRef") ?? "",
+      ...(version === undefined ? {} : { version }),
       ...(qnames[0] !== undefined ? { as: flat(qnames[0]) } : {}),
       ...(claims !== undefined ? { claims: jsonValue(claims) } : {}),
       ...(envelope !== undefined ? { envelope: jsonValue(envelope) } : {}),

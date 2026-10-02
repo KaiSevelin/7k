@@ -127,9 +127,6 @@ describe("the example workspace", () => {
       // KioskBridge pins `accepts TicketIssued v1.0`, so it must deploy before
       // TicketService bumps. True today, a constraint on the next release.
       "deploy-order examples/sales.7k",
-      // Nothing consumes it: the sales packages publish it for a reader that is
-      // not modelled here.
-      "orphan-message examples/sales.7k",
       // Deliberately package-private, and documented in the file as an orphan.
       "orphan-message examples/ticketing.7k",
       // OrderService sends ticketing's two commands and nothing in the model says

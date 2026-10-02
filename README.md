@@ -333,7 +333,7 @@ scenario CardDeclinedRefundsNothing {
 |---|---|
 | Selection | `when <predicate>` / `otherwise` · `sequence { }` · `85%` |
 | Driving | `seed` · `at <d> publish` · `advance <d>` · `every <d> for <d>` in a `soak`. A `schedule` needs no publish: `advance 3d` is three nightly closes |
-| Sending | `as <Service>` · `with claims { }` · `with envelope { }` · `unchecked` |
+| Sending | `as <Service>` · `with claims { }` · `with envelope { }` · `unchecked` · `M v1.0` to send an older version |
 | Assertions | `expect [no] M on <pipe> [count n]` · `exactly { }` · `handled` · `rejected ... reason` · `saga X["k"].state ==` · `no stuck saga` |
 
 ---

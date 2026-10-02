@@ -106,6 +106,11 @@ over this:
 
 A pattern outside the portable subset with no declared dialect is a warning, not an error.
 
+**Declare an `example` alongside a `pattern`.** A generator cannot invert a regular expression, so `$auto`
+on a patterned field has nothing to work from and will produce a value that fails the field's own contract.
+`CountryCode` in the examples had a pattern and no example, and every generated fixture containing one was
+refused by the composer until it got one.
+
 ## 3. Normalization
 
 `normalize` declares how a value is canonicalized at every boundary, so that equality is

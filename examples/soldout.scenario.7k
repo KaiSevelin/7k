@@ -223,3 +223,28 @@ soak ReserveUnderLoad {
 //     D32 7.4, so a hand-written fixture and a tool-written one will not look
 //     identical.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 8. A producer that has not caught up. OrderPlaced is at v1.1; this publishes
+//    v1.0, which has no `note` field at all, and the upcast in sales.7k supplies
+//    `note = absent` on the way in.
+//
+//    Pinning the version on a publish is the only way to arrange this: nothing
+//    else in a scenario can produce a message from a service still on the old
+//    contract, which is why the upcast was declared and never exercised until the
+//    runtime could receive one.
+// ---------------------------------------------------------------------------
+
+scenario OldOrderPlacedUpcasts {
+  seed 1
+
+  at 0s publish OrderPlaced v1.0 as WebApp {
+    orderId: "ORD-10500",
+    buyer:   "$auto",
+    seats:   { $repeat: 2, of: "$auto" },
+    total:   "$auto"
+  }
+
+  advance 1s
+  expect Reporting handled OrderPlaced count 1
+}

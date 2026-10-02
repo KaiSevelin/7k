@@ -54,25 +54,49 @@ export function analyzeVersions(model: LinkedModel): Diagnostic[] {
 function versionMismatch(model: LinkedModel): Diagnostic[] {
   const out: Diagnostic[] = [];
 
+  /** Every version a producer may put on a message: a pinned `emits`, else its own. */
+  const sent = new Map<string, Map<string, string>>();
+  for (const service of servicesOf(model)) {
+    for (const emit of service.emits) {
+      const message = model.declFor(emit.message);
+      if (message?.kind !== "message") continue;
+      const version = emit.version ?? message.version;
+      if (version === undefined) continue;
+
+      const key = symbolKey(message.id.pkg, message.id.name);
+      const row = sent.get(key) ?? new Map<string, string>();
+      row.set(version, service.id.name);
+      sent.set(key, row);
+    }
+  }
+
   for (const service of servicesOf(model)) {
     for (const react of service.reacts) {
       if (react.accepts === undefined) continue;
 
       const message = model.declFor(react.message);
-      if (message?.kind !== "message" || message.version === undefined) continue;
+      if (message?.kind !== "message") continue;
 
-      const declared = parseVersion(message.version);
-      if (declared === undefined || admits(react.accepts, declared)) continue;
+      const key = symbolKey(message.id.pkg, message.id.name);
+      // A message with no modelled producer still declares a version, and a consumer
+      // rejecting it is worth reporting: nothing could ever reach this subscription.
+      const versions =
+        sent.get(key) ??
+        (message.version === undefined ? new Map<string, string>() : new Map([[message.version, "its producers"]]));
 
-      out.push({
-        code: "version-mismatch",
-        severity: "error",
-        message:
-          `\`${service.id.name}\` accepts \`${message.id.name}\` at ${showAccepts(react.accepts)} but it ` +
-          `is declared v${message.version}, so every message its producers send is one this consumer ` +
-          "rejects",
-        span: react.span,
-      });
+      for (const [version, producer] of versions) {
+        const declared = parseVersion(version);
+        if (declared === undefined || admits(react.accepts, declared)) continue;
+
+        out.push({
+          code: "version-mismatch",
+          severity: "error",
+          message:
+            `\`${service.id.name}\` accepts \`${message.id.name}\` at ${showAccepts(react.accepts)} but ` +
+            `\`${producer}\` sends v${version}, so every one of those is a message this consumer rejects`,
+          span: react.span,
+        });
+      }
     }
   }
 

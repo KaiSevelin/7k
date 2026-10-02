@@ -15,7 +15,10 @@ value Line         : string { length 1..255; normalize trim, collapseSpace }
 value Line60       : Line   { length 1..60 }
 
 value PostCode     : string { length 4..10; normalize strip(" "), upper }
-value CountryCode  : string { length 2; normalize upper; pattern /^[A-Z]{2}$/ }
+// A pattern is the one constraint a generator cannot invert, so a declared `example`
+// is what lets $auto produce a value that satisfies it. Without one, a generated
+// fixture fails its own contract - which is how this example came to have one.
+value CountryCode  : string { length 2; normalize upper; pattern /^[A-Z]{2}$/; example "SE" }
 value CurrencyCode : string { length 3; normalize upper }
 
 value OrderRef     : string { length 1..32; example "ORD-10432" }

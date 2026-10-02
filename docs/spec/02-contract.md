@@ -330,7 +330,20 @@ upcast OrderPlaced v1.0 to v1.1 {
 ```
 
 Only assignment from a field path, a literal, or `absent` is permitted. Anything requiring computation or a
-lookup is not an upcast — it is a translating service, which belongs in the Topology layer.
+lookup is not an upcast — it is a translating service, which belongs in the Topology layer. A field path is
+read against the shape **before** that step, so a rename — a remove plus an add, and therefore major — is
+one assignment.
+
+Upcasts **chain**: a v1.0 message reaching a v1.2 consumer applies 1.0→1.1 and then 1.1→1.2. A runtime
+applies them on receipt, before validation, because an older message is not yet in the shape the consumer's
+contract describes. A chain that cannot complete is not half-applied silently — the result would be a shape
+that is neither version — so what is produced fails validation and the runtime says which step was missing.
+
+Two things make this runnable without the model carrying every past version. A message's older **shape**
+comes from `@since`: the fields it had at v1.0 are those with no later `@since`, which is the same reading
+`version-classification` uses, so the two agree by construction. And a *scenario* pins the version it sends
+— `publish OrderPlaced v1.0 as WebApp` — because nothing else can arrange for a producer that has not caught
+up, and an upcast no sender can trigger is a declaration nothing exercises.
 
 **There is no downcast.** A consumer pinned to an older version receiving a newer message is handled by
 version, not by translation:

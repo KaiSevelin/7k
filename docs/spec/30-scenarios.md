@@ -53,6 +53,7 @@ at 0s publish PlaceOrder as Storefront
 
 | Clause | Means |
 |---|---|
+| `<Message> v1.0` | the version to send, where it is not the message's current one. The body is then the shape that version had, from `@since` — and this is the only way to exercise an `upcast` |
 | `as <Service>` | who emitted it. The pipe comes from that service's `emits` clause, so a scenario never names one |
 | `with claims { }` | the synthetic principal, which is what makes authorization failures testable |
 | `with envelope { }` | envelope values this send overrides; a runtime supplies the rest |

@@ -148,11 +148,19 @@ export interface MessageIr extends DeclBase {
   readonly includes: readonly Ref[];
 }
 
+/**
+ * `upcast OrderPlaced v1.0 to v1.1 { note = absent }`.
+ *
+ * Declared in the model so that generated code has one canonical home for it and a runtime can
+ * exercise it (`02-contract.md` section 5.4). Only assignment from a field path, a literal or
+ * `absent` is permitted — anything needing computation is a translating service, not an upcast.
+ */
 export interface UpcastIr extends DeclBase {
   readonly kind: "upcast";
   readonly message: Ref;
   readonly from?: string;
   readonly to?: string;
+  readonly assigns: readonly AssignIr[];
 }
 
 export type Delivery = "at-most-once" | "at-least-once" | "effectively-once";
@@ -174,6 +182,14 @@ export interface PipeIr extends DeclBase {
 export interface EmitIr {
   readonly message: Ref;
   readonly pipe: Ref;
+  /**
+   * The version this producer sends, where it pins one: `emits TicketIssued v1.0 to events`.
+   * Absent means the message's own declared version, which is the ordinary case.
+   *
+   * `02-contract.md` section 5.6 asks whether a set of services can deploy in any order "given
+   * the declared producer versions and consumer accepted ranges" — this is that first half.
+   */
+  readonly version?: string;
   readonly span: Span;
 }
 
@@ -261,6 +277,13 @@ export type AssignSource =
         | "terminal";
       readonly path: readonly string[];
     }
+  /**
+   * An unqualified field path, whose meaning is the enclosing construct's: the saga instance
+   * in a `send` block, the message being translated in an `upcast`. Kept as its own kind rather
+   * than resolved during lowering, because the lowering does not know which construct it is in
+   * and a guess there would be wrong half the time.
+   */
+  | { readonly from: "path"; readonly path: readonly string[] }
   /** `note = absent` — clears the field, since there is no null in 7K. */
   | { readonly from: "absent" }
   | { readonly from: "literal"; readonly value: string | number | boolean };

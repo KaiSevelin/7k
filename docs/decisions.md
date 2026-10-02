@@ -2273,6 +2273,62 @@ this. Three were asserted as passing by a comment before a check existed.
 
 ---
 
+## D88 — Upcasts run, and a bare path means whatever is in hand
+
+An `upcast` is applied on receipt, before validation, chaining through every declared step from
+the version a message carries to the one its consumer understands. A scenario pins the version
+it sends — `publish OrderPlaced v1.0 as WebApp` — because nothing else can arrange for a
+producer that has not caught up.
+
+**Why it had to be done:** the specification says an upcast is declared in the model "so that
+generated code has one canonical home for it **and the sandbox can exercise it**" (5.4). Neither
+half was true. Core resolved the declaration and dropped its body; nothing applied it. A
+declared migration that silently does nothing is worse than a missing one, because the model
+reads as though versioning works.
+
+Four things had to be built, and three of them were bugs rather than features.
+
+**`ref()` mangled every versioned reference.** `msgRef = qname [ version ]` permits a version
+anywhere a message is named, and the lowering joined the whole node — so `M v1.0` became the
+name `Mv1.0` and resolved to nothing. That affected `emits`, `reacts`, `replies`, `carries`, a
+saga's `send`, and a scenario's `publish`. One central fix: a reference's text is its `QName`,
+and the version is read separately.
+
+**An `emits` may pin a version, and now means something.** §5.6 asks whether services can deploy
+in any order "given the declared producer versions and consumer accepted ranges" — so
+`emits TicketIssued v1.0 to events` *is* a declared producer version. `version-mismatch` compares
+a consumer's range against every version its producers may send, rather than against the message's
+own declaration alone.
+
+**The upcast body had a second assignment parser**, which read `message.customer` as a bare
+two-segment path and lost the scope. Replaced with the shared one — the same "two implementations
+of one thing" this project keeps finding.
+
+**A bare path is its own source kind.** `AssignSource` gains `{ from: "path" }`. An unqualified
+name means the saga instance inside a `send` block and the message being translated inside an
+`upcast`, and the lowering does not know which construct it is in — so resolving it there would be
+wrong half the time. The spec's own phrase for an upcast's source is "a field path", unqualified,
+so this is the form it describes.
+
+### Three findings
+
+**The checker caught this work's own test model.** `channel` was required and `@since(1.2)`,
+which `version-classification` correctly refuses: adding a required field is major. Rewritten as
+v2.0 — which is also the case an upcast is most needed for, so the test got better.
+
+**`CountryCode` had a pattern and no `example`.** A generator cannot invert a regular expression,
+so `$auto` produced a two-character value that failed `^[A-Z]{2}$` and the composer refused every
+fixture containing a `Buyer`. The property the schema tests assert — everything `$auto` produces,
+validation accepts — held only for patterned fields that had an example, and no test covered the
+other case. `01-kernel.md` now says to declare one.
+
+**`OrderPlaced` had an upcast and no consumer**, so nothing could ever apply it. The file's own
+comment admitted the reader was "not modelled here"; it is modelled now, as `Reporting` with
+`accepts v1.x`, which is both what removes a documented orphan and what gives the upcast something
+to translate for.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.
@@ -2292,6 +2348,7 @@ Two remain. All others are resolved — see the decisions named.
 
 | Was | Resolved by |
 |---|---|
+| Upcasts declared and never applied | D88 — applied on receipt, chained, with a scenario pinning the version |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |
