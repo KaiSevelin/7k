@@ -2649,6 +2649,73 @@ git and to grep, and a search for the code around it silently found nothing.
 
 ---
 
+## D95 — Labels propagate, and a `label:` selector spans the whole `@name` namespace
+
+`01-kernel.md` section 6 says labels propagate upward — "a record containing a `@pii` field is
+PII-bearing, a message containing that record is PII-bearing, and every pipe carrying that message is
+PII-bearing. **This is computed, not declared**" — and promises three things from the one annotation: a
+data map, a binding-layer obligation, a codegen obligation.
+
+It had never been computed. The IR carried `labels` as declared, the only consumers were `x-7k-labels`
+in the JSON Schema projection and one test, and all three promised uses rested on a mechanism that did
+not exist. The fifth specified-and-unimplemented feature found by its first real consumer, after
+upcasts (D88), invariants (D89), projections (D90) and the trace format (D93).
+
+`packages/core/src/ir/labels.ts` computes it, in Core by D94's rule.
+
+### What it walks
+
+Field to record to message to pipe, reaching through a list, a `map` on both halves, and an `include`
+splice — and through **the envelopes a message carries** (D50), because an envelope field marked `@pii`
+is as much on the wire as a body field, and a map of where PII flows that missed the envelope would be
+wrong in the most consequential place.
+
+A cycle contributes what has been established and stops, rather than hanging: a self-referential record
+is legal and a label map is not the place to discover that.
+
+**It stops at the pipe, where section 6 stops.** A service emitting a PII message is arguably
+PII-handling, and a `PiiFlow` lens might well want to show it — but extending the chain is a new claim
+about the language, and that belongs in a decision rather than in an implementation. Left as it is,
+deliberately.
+
+### `label:` matches labels *and* annotations
+
+`views.json`'s own examples include `"Perimeter": { "include": ["label:external"] }` — and section 6
+makes `label external` **an error to declare**, because labels and language annotations share the
+`@name` namespace. So the lens as written could never match a declared label.
+
+The example is right and the selector is broader than its name. Labels and annotations share one
+namespace, which section 6 states outright, so a selector over that namespace covers both: `marksOf`
+unions them. `label:external` therefore selects the perimeter while `label external` stays illegal to
+declare.
+
+The cost is that the selector's name is narrower than what it does. The alternative — a fourth
+`annotation:` selector form in a published sidecar — adds something to learn for a distinction the
+kernel has already said does not exist in that namespace.
+
+---
+
+## D96 — An annotation may follow a declaration's name, on every declaration
+
+`record Address @pii`, `message OrderPlaced v1.1 @event`, `service WebApp @external`: every example
+writes an annotation after the name. The grammar documented only the other placement
+(`anns = { ann }` preceding the keyword), and the parser accepted after-name on `record`, `message` and
+`service` while rejecting it on `value`, `enum`, `pipe`, `saga` and `schedule`.
+
+So `value CardToken @pci : string`, written by analogy with the examples, produced "expected a
+declaration" — a bad error for a reasonable guess, and one nothing would have caught, because no
+example annotates a value, an enum or a pipe.
+
+Both placements now work everywhere, and the grammar says so. The after-name form is the idiom, so the
+inconsistency was never that three declarations had it; it was that five did not.
+
+**It attaches to the name, not to what follows.** `value V : string @pii` and
+`pipe p : topic @pii` stay errors, because there the annotation would read as marking the type or the
+pipe kind. Where a declaration has a version, the annotation goes after it — `message M v1.0 @event`,
+and now `saga Flow v1.0 @pii` — because the version is part of the name.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -2670,6 +2737,8 @@ One remains. All others are resolved — see the decisions named.
 | `layout.json` and `forms.json` named and unspecified | D92 — `20-ir.md` 6.2 and 6.3, with examples |
 | The trace format published and unspecified | D93 — `30-scenarios.md` 7, defined in Core, with a fixture |
 | Boundary detection derived in two places, differently | D94 — `ir/topology.ts`, with the narrow question named separately |
+| Labels specified to propagate and never computed | D95 — `ir/labels.ts`, field to record to message to pipe |
+| Annotation placement undocumented and inconsistent | D96 — after the name on every declaration, and in the grammar |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |

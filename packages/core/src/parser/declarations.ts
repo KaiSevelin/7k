@@ -114,14 +114,28 @@ const clauseBody = (c: Cursor, table: ClauseTable, what: string): CstNode =>
 // ---- Contract layer --------------------------------------------------------
 
 function valueDecl(c: Cursor, anns: CstNode[]): CstNode {
-  const parts: CstChild[] = [...anns, c.advance(), c.expectName("a value name"), c.expectPunct(":"), typeRef(c)];
+  const parts: CstChild[] = [
+    ...anns,
+    c.advance(),
+    c.expectName("a value name"),
+    // After the name as well as before the keyword: every example writes `record Address @pii`,
+    // so that is the idiom, and a declaration that refused it was the inconsistency (D96).
+    ...annotations(c),
+    c.expectPunct(":"),
+    typeRef(c),
+  ];
   const b = constraintBody(c);
   if (b !== undefined) parts.push(b);
   return node("ValueDecl", parts);
 }
 
 function enumDecl(c: Cursor, anns: CstNode[]): CstNode {
-  const parts: CstChild[] = [...anns, c.advance(), c.expectName("an enum name")];
+  const parts: CstChild[] = [
+    ...anns,
+    c.advance(),
+    c.expectName("an enum name"),
+    ...annotations(c),
+  ];
   parts.push(
     body(
       c,
@@ -202,7 +216,13 @@ const PIPE_ATTRS: ClauseTable = {
 };
 
 function pipeDecl(c: Cursor, anns: CstNode[]): CstNode {
-  const parts: CstChild[] = [...anns, c.advance(), c.expectName("a pipe name"), c.expectPunct(":")];
+  const parts: CstChild[] = [
+    ...anns,
+    c.advance(),
+    c.expectName("a pipe name"),
+    ...annotations(c),
+    c.expectPunct(":"),
+  ];
   parts.push(c.eatKeyword("queue", "topic", "stream") ?? c.missing("`queue`, `topic` or `stream`"));
   // A declaration where everything defaults needs no body at all.
   if (c.atPunct("{")) parts.push(clauseBody(c, PIPE_ATTRS, "a pipe attribute"));
@@ -373,6 +393,8 @@ const SAGA_ITEMS = (c: Cursor): CstNode | undefined => {
 function sagaDecl(c: Cursor, anns: CstNode[]): CstNode {
   const parts: CstChild[] = [...anns, c.advance(), c.expectName("a saga name")];
   parts.push(c.eatKind("version") ?? c.missing("a version"));
+  // After the version, as a message takes it: `message M v1.0 @event`.
+  parts.push(...annotations(c));
   parts.push(body(c, SAGA_ITEMS, "`start`, `state`, `step` or `on`"));
   return node("SagaDecl", parts);
 }
@@ -393,6 +415,7 @@ const SCHEDULE_ATTRS: ClauseTable = {
 
 function scheduleDecl(c: Cursor, anns: CstNode[]): CstNode {
   const parts: CstChild[] = [...anns, c.advance(), c.expectName("a schedule name")];
+  parts.push(...annotations(c));
   parts.push(clauseBody(c, SCHEDULE_ATTRS, "`every`, `send` or `onMissed`"));
   return node("ScheduleDecl", parts);
 }

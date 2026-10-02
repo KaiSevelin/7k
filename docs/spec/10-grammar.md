@@ -148,6 +148,11 @@ ann          = "@" ident [ "(" [ annArgs ] ")" ] ;
 annArgs      = annArg { "," annArg } ;
 annArg       = [ ident "=" ] ( literal | qname | path ) ;
 anns         = { ann } ;
+
+(* An annotation may also follow a declaration's name - after its version where it has one -
+   and that is the form every example uses: `record Address @pii`, `message M v1.0 @event`,
+   `value CardToken @pci : string`, `pipe telemetry @internal : topic`. Both placements mean
+   the same thing; the rules below show `anns` only, for brevity. See D96. *)
 ```
 
 Language annotation names are **reserved**, because labels and language annotations share the `@name`
