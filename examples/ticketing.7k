@@ -121,6 +121,12 @@ service TicketService {
   emits SeatLedgerAdjusted   to events
   emits SeatInventoryChanged to events
 
+  // Two claim checks, and only one of them is sound. `claim.scope` authorizes the
+  // caller, which inside the system is the orchestrator, and that works anywhere.
+  // `claim.tid == envelope.tenantId` compares a claim against data the originator
+  // set, and `commands` has no @external producer - so once OrderService is the
+  // sender the claim set is its own and this can never hold. Core reports it as
+  // claim-subject-internal. Left in place because the trap is the point.
   reacts ReserveSeats from commands {
     requires claim.tid == envelope.tenantId
              and claim.scope contains "ticketing.write"

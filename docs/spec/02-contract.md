@@ -300,6 +300,13 @@ The checker classifies every change between two versions of a message:
 A declared version bump that does not match the computed classification is an error. You cannot
 call a breaking change a minor version.
 
+Classifying a change needs **two** versions, and a model holds one. What a single model can answer is
+what `@since` records: a field marked `@since(1.1)` arrived in a minor release, and adding a required
+field is major — a consumer on 1.0 has no value for it. That is what `version-classification` checks.
+The rows needing the previous declaration — a removed field, a tightened constraint, a changed type —
+want the published baseline, which belongs to a schema registry or a comparison against the last tag
+rather than to one model's IR.
+
 ### 5.3 Version ranges
 
 Consumers declare what they accept (Topology layer):

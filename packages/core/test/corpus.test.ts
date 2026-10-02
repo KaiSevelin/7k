@@ -118,6 +118,12 @@ describe("the example workspace", () => {
       .map((d) => `${d.code} ${d.span.file}`)
       .sort();
     expect(found).toEqual([
+      // TicketService requires `claim.tid == envelope.tenantId` on a queue only
+      // internal services publish to. Exactly the trap 04-process.md 1.8 describes:
+      // once OrderService is the sender the claim set is its own, so the check cannot
+      // hold. Two subscriptions carry it, and the file documents both.
+      "claim-subject-internal examples/ticketing.7k",
+      "claim-subject-internal examples/ticketing.7k",
       // KioskBridge pins `accepts TicketIssued v1.0`, so it must deploy before
       // TicketService bumps. True today, a constraint on the next release.
       "deploy-order examples/sales.7k",

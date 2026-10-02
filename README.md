@@ -342,7 +342,7 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 435 tests
+npm test            # 458 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 
@@ -353,10 +353,14 @@ fanned out to every subscriber or an event sent to only one, a consumer whose pa
 ordering, a role nothing claims, a command nothing in the model prompts, a version pin that constrains
 deployment order, two services sharing one subscription cursor, a filter reading what a broker cannot see or
 discarding what nobody else will take, an `@internal` scope that is not an ancestor, a message a pipe does not
-carry, a refinement that loosens its base, and an `upcast` for somebody else's message. In a saga: a
+carry, a refinement that loosens its base, an `upcast` for somebody else's message, a consumer that rejects
+the version its producers send, a required field added in a minor release, a deduplication window shorter
+than a producer's retry horizon, and an identity check that cannot hold once an internal service is the
+sender. In a saga: a
 step that does not handle a reply its send can produce, state read before anything assigns it, a wait
 nothing will ever end, an uncompensated step, a correlation key that is missing or identifies something
-else, a parent that gives up before its child's deadline, and a cycle of sagas starting each other. In a
+else, a parent that gives up before its child's deadline, a cycle of sagas starting each other, an await a
+filter can starve, and progress that depends on a lossy pipe. In a
 scenario: a mocked reply outside a handler's declared outcome space, a mock for a message the service does
 not consume, load generation outside a `soak`, and weighted outcomes that do not sum to 100%.
 

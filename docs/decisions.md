@@ -2220,6 +2220,59 @@ than a defect, since the checker refuses the model first.
 
 ---
 
+## D87 — Batch three, and what a single model cannot answer
+
+The last six: `version-mismatch`, `version-classification`, `dedup-window-short`,
+`claim-subject-internal`, `filter-blocks-await`, `liveness-over-lossy-pipe`. Every specified
+diagnostic that can be a check now is one — thirty-seven of thirty-nine.
+
+Three of the six needed a reading.
+
+**`version-classification` can only check what `@since` records.** The specification classifies
+every change "between two versions of a message", and a model holds one. The computable part is
+real and catches the common mistake: a field marked `@since(1.1)` arrived in a minor release,
+and adding a *required* field is major, because a consumer on 1.0 has no value for it. Also
+checkable: a field claiming to arrive after its own message. The rows that need the previous
+declaration — a removed field, a tightened constraint, a changed type — want the published
+baseline, which belongs to a registry or a comparison against the last tag, not to one model's
+IR. Said in the spec rather than left for the next person to discover.
+
+**A producer's retry horizon is its own subscription's.** `dedup-window-short` compares a
+pipe's `within` against "the retry horizon of its producers", and 7K has no producer-retry
+clause. It does not need one: being retried is *how* a producer publishes twice — the publish
+timed out, actually succeeded, and the retry sends it again — so the policy that governs the
+duplicate is the one on the publishing service's own subscription. The horizon is the sum of
+its backoffs under the declared cap.
+
+**`claim-subject-internal` tests the pipe, not the claim's name.** §1.8's example is
+`claim.sub == envelope.customerId`, and detecting it by the name `sub` would be checking a
+convention — which this project has refused everywhere else. The structural test is whether any
+`@external` service publishes to the pipe. And the reasoning generalises past the subject: a
+service credential carries the service's scopes, not a user's tenant, so `claim.tid ==
+envelope.tenantId` fails the same way.
+
+That last one found something. **`ticketing.7k` has it, twice**, on a queue only
+`acme.retail.sales` publishes to — so once `OrderService` is the sender, `claim.tid` is
+OrderService's and the check cannot hold. The same file's `claim.scope contains
+"ticketing.write"` is sound, because a scope authorizes the caller and a service legitimately
+holds one. Both are left in place with a comment, because a file demonstrating the difference
+between a sound and an unsound claim check is worth more than one that only demonstrates the
+sound kind.
+
+### Where the checker stands
+
+| | |
+|---|---|
+| Implemented | 37 |
+| `external-bound` | needs a binding construct the language does not have; belongs with provider work |
+| `schedule-overrun` | a runtime observation, not a static one. The sandbox reports it as a trace event |
+
+The examples now carry seven warnings and no errors, and every one of the seven is true and
+documented in the file it points at — which was the whole purpose of the audit that started
+this. Three were asserted as passing by a comment before a check existed.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.

@@ -17,7 +17,9 @@
  * Plus two that fall out of what the model already knows: `reply-without-emit`
  * and `missing-dedupe-key`.
  *
- * Three sibling modules hold the rest. `analyze-contract.ts` has the ones needing least
+ * Four sibling modules hold the rest. `analyze-versions.ts` has the ones needing most: a
+ * declared version against every consumer's range, a deduplication window against a producer's
+ * retry horizon, a saga's awaits against the subscriptions that carry them. `analyze-contract.ts` has the ones needing least
  * context — a value against its base, a subscription against its own pipe. `analyze-wiring.ts` has the ones that read a
  * Contract-layer declaration against a Topology-layer one — an intent against a pipe kind,
  * an ordering key against a consumer's concurrency. `analyze-process.ts` has the ones that
@@ -28,6 +30,7 @@
 import type { Diagnostic } from "../diagnostics.js";
 import { analyzeContract } from "./analyze-contract.js";
 import { analyzeProcess } from "./analyze-process.js";
+import { analyzeVersions } from "./analyze-versions.js";
 import { analyzeWiring } from "./analyze-wiring.js";
 import type { LinkedModel } from "./link.js";
 import {
@@ -59,6 +62,7 @@ export function analyze(model: LinkedModel): Diagnostic[] {
     ...analyzeContract(model),
     ...analyzeWiring(model),
     ...analyzeProcess(model),
+    ...analyzeVersions(model),
   ];
 }
 
