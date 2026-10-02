@@ -2598,6 +2598,57 @@ Three things execute it, which is the whole point:
 
 ---
 
+## D94 — Derived topology questions live in Core
+
+Three things were computed in more than one place, and the duplication was not harmless.
+
+**"Which pipes are at the boundary" had two implementations that disagreed.** The projection counted a
+pipe with an `@external` producer *or consumer*, as `03-topology.md` 1.6 says. An analysis counted only
+producers. Neither was obviously wrong on its own — and that is the problem, because one of them was
+answering a different question under the same name.
+
+They are now two named functions in `packages/core/src/ir/topology.ts`:
+
+- **`boundaryPipes`** — an external producer **or** consumer. The specification's boundary.
+- **`externallyPublishedPipes`** — publishers only. The narrower question a claim check needs, because
+  a check about who *sent* a message is not satisfied by a pipe an outsider merely reads from.
+
+The narrow one kept its behaviour and gained a name that says what it is. Its comment had called it
+"the boundary pipes", which is how it would have been mistaken for the boundary again.
+
+`boundaryMessages`, `servicesOf` and `pipesOf` moved for the same reason — `servicesOf` existed three
+times — and `npm run project` produces a byte-identical set of schemas afterwards, so the shared
+definition is the projection's own behaviour and not a new one.
+
+### Why this keeps happening, and the rule it suggests
+
+1.6 says the boundary is "derived, never declared — the `@external` marking is already there, so asking
+for it twice would let the two disagree." That reasoning applies to *deriving* it twice as well. A
+derived concept needs one home as much as a declared one needs one spelling, and Core is where the
+others already live: `admits` for version ranges, `flatFields` for `include`, `pathSegmentsOf` for
+paths. Each of those was consolidated after a divergence rather than before one.
+
+Spider is what surfaced it. Needing boundary detection to draw a boundary, it would have become the
+fourth copy.
+
+### Two smaller corrections found the same way
+
+**The `as` clause was in the wrong table.** `03-topology.md` listed `as <name>` among the clauses that
+go *inside* a `reacts` block, beside `where` and `replies`. The grammar
+(`10-grammar.md`: `reactsStmt = "reacts" msgRef "from" pipeRef [ "as" ident ]`) and the parser both put
+it on the header line, and the parser rejects it inside the braces. Two parts of the specification
+disagreed, and the grammar was right; the table now describes the header form and says why the clause
+sits there — it identifies a subscription rather than configuring one.
+
+No example uses `as` at all, which is why nothing had noticed. The corpus still does not exercise it.
+
+**A literal NUL byte was in `analyze-contract.ts`**, where `\u0000` was meant — a composite map key
+written through a shell heredoc that ate the escape. It worked, because a NUL is a perfectly good
+character in a JavaScript string, and that is exactly why it survived: the file was simply binary to
+git and to grep, and a search for the code around it silently found nothing.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -2618,6 +2669,7 @@ One remains. All others are resolved — see the decisions named.
 | Parameterized values | D91's neighbour: declined. The family approach (`SwedishPostCode`) stands |
 | `layout.json` and `forms.json` named and unspecified | D92 — `20-ir.md` 6.2 and 6.3, with examples |
 | The trace format published and unspecified | D93 — `30-scenarios.md` 7, defined in Core, with a fixture |
+| Boundary detection derived in two places, differently | D94 — `ir/topology.ts`, with the narrow question named separately |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |

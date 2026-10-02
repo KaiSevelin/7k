@@ -12,6 +12,7 @@
  */
 
 import {
+  boundaryMessages as coreBoundaryMessages,
   flatFields,
   isAncestorPackage,
   qualify,
@@ -508,38 +509,10 @@ export function jsonSchema(options: JsonSchemaOptions): Projection<JsonSchemaOpt
    *
    * A boundary pipe is one with an `@external` producer or consumer, and its input is untrusted, so
    * it projects `strict` (6.3). Derived rather than chosen, because the boundary is a fact about the
-   * model and not a preference.
+   * model and not a preference — and derived in Core, because two copies of this had already
+   * disagreed about whether a consumer counts (D94).
    */
-  const boundaryMessages = (): ReadonlySet<string> => {
-    const boundaryPipes = new Set<string>();
-    for (const decl of model.decls) {
-      if (decl.kind !== "service" || !decl.external) continue;
-      for (const emit of decl.emits) {
-        const id = model.resolve(emit.pipe);
-        if (id !== undefined) boundaryPipes.add(symbolKey(id.pkg, id.name));
-      }
-      for (const react of decl.reacts) {
-        const id = model.resolve(react.pipe);
-        if (id !== undefined) boundaryPipes.add(symbolKey(id.pkg, id.name));
-      }
-    }
-
-    const out = new Set<string>();
-    for (const decl of model.decls) {
-      if (decl.kind !== "service") continue;
-      const touches = [
-        ...decl.emits.map((e) => ({ pipe: e.pipe, message: e.message })),
-        ...decl.reacts.map((r) => ({ pipe: r.pipe, message: r.message })),
-      ];
-      for (const { pipe, message } of touches) {
-        const p = model.resolve(pipe);
-        const m = model.resolve(message);
-        if (p === undefined || m === undefined) continue;
-        if (boundaryPipes.has(symbolKey(p.pkg, p.name))) out.add(symbolKey(m.pkg, m.name));
-      }
-    }
-    return out;
-  };
+  const boundaryMessages = (): ReadonlySet<string> => coreBoundaryMessages(model);
 
   // ---- artifacts ------------------------------------------------------------
 

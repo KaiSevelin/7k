@@ -25,10 +25,9 @@ import {
   type SagaIr,
   type ServiceIr,
 } from "./model.js";
+import { externallyPublishedPipes, servicesOf } from "./topology.js";
 import { admits, parseVersion, showAccepts, type Version } from "./version.js";
 
-const servicesOf = (m: LinkedModel): ServiceIr[] =>
-  m.decls.filter((d): d is ServiceIr => d.kind === "service");
 
 const sagasOf = (m: LinkedModel): SagaIr[] => m.decls.filter((d): d is SagaIr => d.kind === "saga");
 
@@ -320,15 +319,10 @@ function claimAgainstEnvelope(predicate: Predicate): { claim: string; field: str
 function subjectChecksInside(model: LinkedModel): Diagnostic[] {
   const out: Diagnostic[] = [];
 
-  /** Pipes with at least one `@external` producer, which are the boundary pipes. */
-  const fromOutside = new Set<string>();
-  for (const service of servicesOf(model)) {
-    if (!service.external) continue;
-    for (const emit of service.emits) {
-      const id = model.resolve(emit.pipe);
-      if (id !== undefined) fromOutside.add(symbolKey(id.pkg, id.name));
-    }
-  }
+  // Pipes an `@external` service publishes to — deliberately *not* the boundary pipes, which also
+  // include those an outsider only reads from. This check is about who sent the message, and a pipe
+  // an outsider merely consumes from still has an internal sender.
+  const fromOutside = externallyPublishedPipes(model);
 
   for (const service of servicesOf(model)) {
     for (const react of service.reacts) {

@@ -176,7 +176,7 @@ service TicketService {
 | Clause | Default | Meaning |
 |---|---|---|
 | `emits M to P` | — | this service publishes `M` on pipe `P`, whether in response to something or not |
-| `reacts M from P` | — | this service **consumes** `M` from pipe `P`. Consuming is not responding; the response, if any, is `replies` |
+| `reacts M from P [as <name>]` | the subscription name defaults to the service name | this service **consumes** `M` from pipe `P`. Consuming is not responding; the response, if any, is `replies`. `as` names the subscription (2.4) and sits on this line rather than inside the braces, because it identifies the subscription rather than configuring it |
 | `accepts v<range>` | the current major | version range this handler understands |
 | `once per <path>` \| `once per none` | the message's `@role(businessKey)` field | deduplication scope, or a claim of natural idempotence; see 2.8 |
 | `where <predicate>` | none | subscription filter; see 2.5 |
@@ -184,7 +184,6 @@ service TicketService {
 | `replies A \| B` | unspecified (`incomplete`) | the handler's outcome space; see 2.1 |
 | `concurrency` | the pipe's ordering key; unconstrained if unordered | see 2.2 |
 | `retry` | 3 retries (4 attempts), 1s base, exponential | see 2.3 |
-| `as <name>` | the service name | subscription name; see 2.4 |
 
 A service's identity is singular: there is exactly one `TicketService` in the model, however many
 processes run it. Replica count and deployment multiplicity belong to an implementation and are invisible
