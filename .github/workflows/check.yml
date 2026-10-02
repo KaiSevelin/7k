@@ -20,3 +20,8 @@ jobs:
       # Lexes every example and every fenced 7k block in the specification, so a
       # decision cannot change without the spec and examples following.
       - run: npm run check
+      # The checked-in schemas must be what the examples project to. `npm test` compares
+      # them, and this proves the generator writes the same bytes rather than the test
+      # merely agreeing with itself.
+      - run: npm run project
+      - run: git diff --exit-code -- examples/schema

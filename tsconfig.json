@@ -5,6 +5,9 @@
       "path": "./packages/core"
     },
     {
+      "path": "./packages/project"
+    },
+    {
       "path": "./packages/cli"
     }
   ]

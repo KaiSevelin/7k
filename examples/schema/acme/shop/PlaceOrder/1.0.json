@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/7k/acme/shop/PlaceOrder/1.0.json",
+  "title": "acme.shop.PlaceOrder v1.0",
+  "description": "The canonical JSON `body` of acme.shop.PlaceOrder, projected from 7K.",
+  "$comment": "This schema is not equivalent validation. 7K's checker is authoritative, and the\nfollowing declared constraints are weaker here or absent entirely:\n\n  Money.amount — range: not expressed. `range 0..` cannot be expressed over a string, which is how a decimal encodes so that it never round-trips through a double\n  Money.currency — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  OrderLine.sku — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  PlaceOrder — invariant: not expressed. `total.currency == lines.[].unit.currency` relates fields, which this schema does not check\n  PlaceOrder — nominal value: not expressed. 5 value types across 5 fields collapse to their base here (CardToken, CurrencyCode, OrderRef, Qty, Sku), so a payload validates with the right shape in the wrong field",
+  "x-7k": {
+    "source": "7K",
+    "target": "JSON Schema 2020-12",
+    "message": "acme.shop.PlaceOrder",
+    "version": "1.0",
+    "mode": "strict",
+    "intent": "command",
+    "losses": [
+      {
+        "construct": "normalize",
+        "at": "OrderLine.sku",
+        "fidelity": "none",
+        "detail": "`normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it"
+      },
+      {
+        "construct": "range",
+        "at": "Money.amount",
+        "fidelity": "none",
+        "detail": "`range 0..` cannot be expressed over a string, which is how a decimal encodes so that it never round-trips through a double"
+      },
+      {
+        "construct": "normalize",
+        "at": "Money.currency",
+        "fidelity": "none",
+        "detail": "`normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it"
+      },
+      {
+        "construct": "invariant",
+        "at": "PlaceOrder",
+        "fidelity": "none",
+        "detail": "`total.currency == lines.[].unit.currency` relates fields, which this schema does not check"
+      },
+      {
+        "construct": "nominal value",
+        "at": "PlaceOrder",
+        "fidelity": "none",
+        "detail": "5 value types across 5 fields collapse to their base here (CardToken, CurrencyCode, OrderRef, Qty, Sku), so a payload validates with the right shape in the wrong field"
+      }
+    ]
+  },
+  "type": "object",
+  "properties": {
+    "orderId": {
+      "type": "string",
+      "examples": [
+        "ORD-1041"
+      ],
+      "minLength": 1,
+      "maxLength": 32,
+      "x-7k-role": "businessKey"
+    },
+    "lines": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/acme_shop_OrderLine"
+      },
+      "minItems": 1,
+      "maxItems": 50
+    },
+    "total": {
+      "$ref": "#/$defs/acme_shop_Money"
+    },
+    "card": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "orderId",
+    "lines",
+    "total",
+    "card"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "acme_shop_OrderLine": {
+      "type": "object",
+      "properties": {
+        "sku": {
+          "type": "string",
+          "examples": [
+            "SKU-77"
+          ],
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "qty": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99
+        },
+        "unit": {
+          "$ref": "#/$defs/acme_shop_Money"
+        }
+      },
+      "required": [
+        "sku",
+        "qty",
+        "unit"
+      ],
+      "additionalProperties": false
+    },
+    "acme_shop_Money": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "string",
+          "pattern": "^-?\\d{1,16}\\.\\d{2}$"
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 3
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

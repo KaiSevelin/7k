@@ -2368,6 +2368,82 @@ generate everything: a payload with a cross-field rule has to write the fields t
 
 ---
 
+## D90 — Projections: JSON Schema only, in its own package, written by an explicit command
+
+`7k project <paths> --out <dir> [--base <uri>] [--mode ...]` writes JSON Schema 2020-12 for a
+model's messages, from a new `packages/project`. One schema per message version, one per package
+for the envelope, and every file carrying what it could not express.
+
+**JSON Schema only, and not as a staging post.** All three reasons section 6.1 gives are served by
+it: a partner or browser app gets the common denominator, Confluent and Azure both accept it, and
+an editor validating a fixture consumes nothing else. What the other three targets would add is
+either the wrong direction or out of scope. Avro's value is schema evolution, which competes with
+7K's own `accepts`, `upcast` and `version-classification` — delegating it would make a registry a
+second source of truth, which section 6 opens by forbidding. protobuf's value is code generation,
+which is an implementation's job (D48, D64); a `.proto` people generate from stops being advisory.
+And OpenAPI is not a message schema language at all: projecting a message to it means projecting to
+`components/schemas`, which in 3.1 *is* JSON Schema 2020-12.
+
+**Its own package, in this repository.** A projection should not be in Core, because it is the first
+thing that writes a format 7K does not own and a second target must be additive rather than a
+rewrite — so a projection returns artifacts in memory (`path`, `content`, `losses`) and the caller
+decides whether they are written, compared against what is checked in, or uploaded. But it is not
+its own *repository* either: unlike the sandbox it is a pure function of the IR with no runtime, and
+its golden files belong beside the examples that generate them.
+
+**Written by `7k project`, never by `7k check`.** A checker that writes files is a surprise in CI,
+and a generated artifact has a destination, a base URI and a mode that are arguments rather than
+defaults. `project` refuses a model that does not check out: a schema derived from unresolved names
+would be a confident artifact about something nobody agreed on, and a partner would be validating
+against it.
+
+**The mode is derived, not defaulted.** Section 6.3 says the choice follows the boundary, so a
+message on a pipe with an `@external` producer or consumer projects `strict` and everything else
+`tolerant`. `--mode` overrides for a caller who knows better; it does not decide. An envelope is
+always tolerant, because a package adding a record to it must not invalidate messages in flight.
+
+### What a loss profile is
+
+Two things get called one, and separating them is most of the value.
+
+The **table in section 6.2** is the projection's loss profile: what the target language cannot
+express, in general. The **header of a file** is that schema's: which of those apply here, and
+where. Not "cross-field invariants are lossy" but `` `total.currency == seats[].price.currency`
+relates fields, which this schema does not check``. Only the second tells a partner what their own
+validation still has to do, and it is in every file twice — as a `$comment` to read and as a
+structured list under `x-7k` so it diffs and a test can assert on it.
+
+One judgement inside that. Nominal collapse is reported **once per schema** with the list of types
+involved, not once per field. It is one property of JSON Schema, true of every nominal value always,
+and the first version listed it sixty-two times across the examples — burying the invariant and the
+`normalize` losses that are specific to the contract under identical lines. A loss profile nobody
+reads to the end is a loss profile that does not work.
+
+Two smaller decisions, both in section 6.2's spirit of saying so rather than refusing:
+
+- An **unconvertible pattern** is omitted and recorded, not an error. A `pcre` pattern that does not
+  compile as ECMA-262 costs that one constraint; the rest of the schema is still worth having. One
+  that does compile is carried over with a `partial` loss, because the dialects differ on more than
+  they agree about.
+- An **`@internal` message** projects, with a loss saying that a schema carries no visibility, so
+  publishing the file publishes a contract that was not public. Refusing would be defensible, but a
+  registry inside the system is a legitimate consumer and the warning is what matters.
+
+### Two findings
+
+**`flatFields` existed twice.** "What fields does this record have?" is a question about the
+language — `include` splices rather than nests — and the sandbox had answered it privately. The
+projection needed the same answer, so it moved to Core and the sandbox calls it. The third
+implementation is the one that never got written.
+
+**A pattern's dialect is part of its token, separated by a space.** `/^[A-Z]{2}$/ re2` lexes as one
+`regex` token including the suffix, which the first conversion attempt did not allow for — so every
+dialect-declared pattern was treated as having none, and the loss went unreported. Found by the test
+that asserts the loss exists, which is the argument for writing the loss profile's tests from the
+specification's table rather than from the implementation.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.
@@ -2376,11 +2452,10 @@ Two remain. All others are resolved — see the decisions named.
    Reconsider if it sees little use.
 2. **Parameterized values** (`PostCode<SE>`). Deferred as a complexity cliff; the family approach
    (`SwedishPostCode`, `UKPostCode`) is the current answer.
-3. **Projections** (`02-contract.md` section 6) — a lossy export into JSON Schema, Avro, protobuf or
-   OpenAPI, each with a documented loss profile. Specified in detail, including the loss table, and
-   unimplemented. Additive rather than corrective, and the one remaining item that wants a design
-   conversation first: which languages, what a loss profile looks like as an artifact, where the
-   output goes, and whether it belongs in Core or beside it.
+3. **A projection beyond JSON Schema.** Avro, protobuf and OpenAPI are named in section 6 and only
+   JSON Schema is implemented (D90), deliberately. The interface is ready for a second — a projection
+   returns artifacts and produces its own loss profile — but none of the three has a reason yet that
+   the first does not already serve. Revisit when a binding needs one, not before.
 
 ### Resolved
 
@@ -2388,6 +2463,7 @@ Two remain. All others are resolved — see the decisions named.
 |---|---|
 | Upcasts declared and never applied | D88 — applied on receipt, chained, with a scenario pinning the version |
 | Invariants declared and never checked | D89 — evaluated on receipt, per record and per element |
+| Projections specified and unimplemented | D90 — JSON Schema 2020-12 in `packages/project`, written by `7k project` |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |

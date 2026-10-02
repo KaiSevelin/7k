@@ -418,12 +418,13 @@ Avro, protobuf, OpenAPI. Each projection has a documented **loss profile**.
 
 ### 6.2 JSON Schema loss profile
 
-Target: JSON Schema 2020-12, validating the canonical JSON `body` (`01-kernel.md` section 7), with a
-separate schema for the envelope and `envelope`.
+Target: JSON Schema 2020-12. One schema per message version validates the canonical JSON `body`, and one
+schema per package validates the `envelope` object (`01-kernel.md` section 7.3) — separate files, because
+the two encode separately and tooling reads a correlation id without knowing the body's schema.
 
 | 7K construct | Projection | Loss |
 |---|---|---|
-| Nominal values | `{"type":"string","maxLength":40}` | **Total.** `OrderRef` and `CustomerRef` project identically. JSON Schema is structural by design, so a payload can validate with the wrong identifier in the wrong field |
+| Nominal values | `{"type":"string","maxLength":40}` | **Total.** `OrderRef` and `CustomerRef` project identically. JSON Schema is structural by design, so a payload can validate with the wrong identifier in the wrong field. Reported once per schema with the list of types involved, since it is one property of the target rather than a finding per field |
 | `length`, `size`, `unique` | `minLength`/`maxLength`, `minItems`/`maxItems`, `uniqueItems` | none |
 | `int` with `range` | `minimum` / `maximum` | none, unless string-encoded (kernel 7.1), where it becomes a pattern |
 | `decimal(p,s)` with `range` | string + pattern | **Partial.** Digit shape survives; the numeric range cannot be expressed over a string |
@@ -433,7 +434,8 @@ separate schema for the envelope and `envelope`.
 | `invariant` across fields | `if`/`then` for trivial cases | **Total** for anything using a `[]` projection |
 | `pattern` with a declared dialect | ECMA-262 | `re2` and `pcre` patterns must be converted, and conversion may fail — in which case the projection omits the constraint and says so |
 | `accepts <range>` | — | No range concept; one schema per version |
-| Labels and roles | annotation keywords | carried, unvalidated |
+| `@internal` | — | **Total.** A schema carries no visibility, so publishing the file publishes a contract that was not public. Recorded as a loss on every internal message |
+| Labels and roles | annotation keywords | carried, unvalidated as `x-7k-labels` and `x-7k-role` |
 
 ### 6.3 Compatibility mode
 
@@ -460,3 +462,23 @@ Schema `$id` follows a base URI plus package, message and version:
 
 The base URI is deployment-specific and therefore an implementation's concern. 7K defines the path and the
 loss profile; the binding supplies the base.
+
+### 6.5 The loss profile an artifact carries
+
+Two different things are called a loss profile, and the distinction is what makes the second useful.
+
+The **table above** is the loss profile of the projection: what JSON Schema cannot express, in general.
+The **header of a generated file** is the loss profile of *that schema*: which of those losses actually
+apply to this contract, and where. Not "cross-field invariants are lossy" but
+
+```
+  OrderPlaced — invariant: not expressed. `total.currency == seats[].price.currency`
+                relates fields, which this schema does not check
+  Money.amount — range: not expressed. `range 0..` cannot be expressed over a string
+```
+
+Only the second tells a partner what their own validation still has to do.
+
+It appears twice in each file: as a `$comment` to be read, and as a structured list under `x-7k` so that
+it diffs and a test can assert on it. A schema with nothing to lose says that too, rather than being
+silent — an empty loss profile is a claim, and a reader should be able to tell it from a missing one.

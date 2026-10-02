@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/7k/acme/retail/ticketing/TicketPrinted/1.0.json",
+  "title": "acme.retail.ticketing.TicketPrinted v1.0",
+  "description": "The canonical JSON `body` of acme.retail.ticketing.TicketPrinted, projected from 7K.",
+  "$comment": "This schema is not equivalent validation. 7K's checker is authoritative, and the\nfollowing declared constraints are weaker here or absent entirely:\n\n  TicketPrinted — nominal value: not expressed. 1 value type across 1 field collapse to their base here (TicketRef), so a payload validates with the right shape in the wrong field",
+  "x-7k": {
+    "source": "7K",
+    "target": "JSON Schema 2020-12",
+    "message": "acme.retail.ticketing.TicketPrinted",
+    "version": "1.0",
+    "mode": "strict",
+    "intent": "event",
+    "losses": [
+      {
+        "construct": "nominal value",
+        "at": "TicketPrinted",
+        "fidelity": "none",
+        "detail": "1 value type across 1 field collapse to their base here (TicketRef), so a payload validates with the right shape in the wrong field"
+      }
+    ]
+  },
+  "type": "object",
+  "properties": {
+    "ticketRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "x-7k-role": "businessKey"
+    }
+  },
+  "required": [
+    "ticketRef"
+  ],
+  "additionalProperties": false
+}

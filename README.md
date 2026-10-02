@@ -342,8 +342,9 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 462 tests
+npm test            # 497 tests
 npm run check       # parses, resolves and analyses the examples and the spec
+npm run project     # writes JSON Schema for the examples, into examples/schema
 ```
 
 **What `7k check` finds.** In a model: unresolved names, duplicate and case-colliding declarations,
@@ -373,6 +374,20 @@ on a virtual clock, so `advance 30d` finishes in microseconds, and a seed makes 
 number. All three layers run: pipes and their delivery guarantees, sagas with their timeouts, deadlines
 and compensation, and schedules on an anchored civil calendar. A service can be run live rather than
 mocked with `--live <Service>`, so the same scenario checks the same claim at three fidelities.
+
+**Projecting a schema.** `7k project` exports a package's messages as JSON Schema 2020-12, one file per
+message version plus one for each package's envelope. It is what an `@external` partner, a schema registry
+or an editor validating a fixture can consume — and because a projection is lossy, every file carries a list
+of what it could not express:
+
+```
+  OrderPlaced — invariant: not expressed. `total.currency == seats[].price.currency`
+                relates fields, which this schema does not check
+```
+
+7K's checker stays authoritative. The schemas for the examples are checked in under
+[examples/schema/](examples/schema/) and verified by CI, so a constraint change shows up as a schema diff —
+which is where somebody notices a partner's validation getting weaker.
 
 **Editing `.7k` files.** The VS Code extension lives in its own repository:
 [KaiSevelin/7k-vscode](https://github.com/KaiSevelin/7k-vscode). It gives highlighting, diagnostics

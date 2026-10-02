@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/7k/acme/shop/DaySettled/1.0.json",
+  "title": "acme.shop.DaySettled v1.0",
+  "description": "The canonical JSON `body` of acme.shop.DaySettled, projected from 7K.",
+  "$comment": "This schema is not equivalent validation. 7K's checker is authoritative, and the\nfollowing declared constraints are weaker here or absent entirely:\n\n  DaySettled — nominal value: not expressed. 1 value type across 1 field collapse to their base here (CurrencyCode), so a payload validates with the right shape in the wrong field\n  Money.amount — range: not expressed. `range 0..` cannot be expressed over a string, which is how a decimal encodes so that it never round-trips through a double\n  Money.currency — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  DaySettled.day — date: weakened. `format` is an annotation by default and many validators ignore it",
+  "x-7k": {
+    "source": "7K",
+    "target": "JSON Schema 2020-12",
+    "message": "acme.shop.DaySettled",
+    "version": "1.0",
+    "mode": "strict",
+    "intent": "event",
+    "losses": [
+      {
+        "construct": "range",
+        "at": "Money.amount",
+        "fidelity": "none",
+        "detail": "`range 0..` cannot be expressed over a string, which is how a decimal encodes so that it never round-trips through a double"
+      },
+      {
+        "construct": "normalize",
+        "at": "Money.currency",
+        "fidelity": "none",
+        "detail": "`normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it"
+      },
+      {
+        "construct": "date",
+        "at": "DaySettled.day",
+        "fidelity": "partial",
+        "detail": "`format` is an annotation by default and many validators ignore it"
+      },
+      {
+        "construct": "nominal value",
+        "at": "DaySettled",
+        "fidelity": "none",
+        "detail": "1 value type across 1 field collapse to their base here (CurrencyCode), so a payload validates with the right shape in the wrong field"
+      }
+    ]
+  },
+  "type": "object",
+  "properties": {
+    "day": {
+      "type": "string",
+      "format": "date",
+      "x-7k-role": "businessKey"
+    },
+    "charged": {
+      "$ref": "#/$defs/acme_shop_Money"
+    }
+  },
+  "required": [
+    "day",
+    "charged"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "acme_shop_Money": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "string",
+          "pattern": "^-?\\d{1,16}\\.\\d{2}$"
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 3
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

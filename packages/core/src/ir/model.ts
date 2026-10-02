@@ -414,6 +414,33 @@ export interface Model {
 export const declOf = (model: Model, id: NodeId): Decl | undefined =>
   model.symbols.get(symbolKey(id.pkg, id.name));
 
+/**
+ * A record's own fields plus everything it `include`s, in declaration order.
+ *
+ * `include` splices rather than nests (`02-contract.md` section 3), so the answer to "what fields
+ * does this have?" is not on the declaration — and every consumer needs the same answer. A field
+ * declared locally shadows an included one of the same name.
+ *
+ * Takes a resolver rather than a `LinkedModel` so that `model.ts` stays free of the link layer.
+ */
+export function flatFields(
+  resolve: (ref: Ref) => Decl | undefined,
+  decl: Decl,
+  depth = 0,
+): FieldIr[] {
+  if (depth > 16) return [];
+  if (decl.kind !== "record" && decl.kind !== "envelope" && decl.kind !== "message") return [];
+
+  const included: FieldIr[] = [];
+  for (const ref of decl.includes) {
+    const target = resolve(ref);
+    if (target !== undefined) included.push(...flatFields(resolve, target, depth + 1));
+  }
+
+  const own = new Set(decl.fields.map((f) => f.name));
+  return [...included.filter((f) => !own.has(f.name)), ...decl.fields];
+}
+
 /** Every declaration belonging to a package. */
 export const declsIn = (model: Model, pkg: string): Decl[] =>
   model.decls.filter((d) => d.id.pkg === pkg);

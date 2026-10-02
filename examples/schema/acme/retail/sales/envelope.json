@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/7k/acme/retail/sales/envelope.json",
+  "title": "acme.retail.sales envelope",
+  "description": "The canonical JSON `envelope` object for every message in acme.retail.sales. Separate from a body because the two encode separately, so tooling reads a correlation id without the schema.",
+  "$comment": "This schema is not equivalent validation. 7K's checker is authoritative, and the\nfollowing declared constraints are weaker here or absent entirely:\n\n  acme.retail.sales envelope — nominal value: not expressed. 2 value types across 2 fields collapse to their base here (TenantRef, UserRef), so a payload validates with the right shape in the wrong field",
+  "x-7k": {
+    "source": "7K",
+    "target": "JSON Schema 2020-12",
+    "package": "acme.retail.sales",
+    "mode": "tolerant",
+    "losses": [
+      {
+        "construct": "nominal value",
+        "at": "acme.retail.sales envelope",
+        "fidelity": "none",
+        "detail": "2 value types across 2 fields collapse to their base here (TenantRef, UserRef), so a payload validates with the right shape in the wrong field"
+      }
+    ]
+  },
+  "type": "object",
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "x-7k-role": "correlation"
+    },
+    "causationId": {
+      "type": "string",
+      "format": "uuid",
+      "x-7k-role": "causation"
+    },
+    "tenantId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "x-7k-role": "partitionKey"
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "x-7k-role": "subject"
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "Web",
+        "Kiosk",
+        "Partner"
+      ]
+    }
+  },
+  "required": [
+    "correlationId",
+    "causationId",
+    "tenantId",
+    "actor",
+    "channel"
+  ],
+  "additionalProperties": true
+}

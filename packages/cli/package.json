@@ -8,6 +8,7 @@
     "7k": "./dist/index.js"
   },
   "dependencies": {
-    "@sevenk/core": "*"
+    "@sevenk/core": "*",
+    "@sevenk/project": "*"
   }
 }

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/7k/acme/shop/ChargeCard/1.0.json",
+  "title": "acme.shop.ChargeCard v1.0",
+  "description": "The canonical JSON `body` of acme.shop.ChargeCard, projected from 7K.",
+  "$comment": "This schema is not equivalent validation. 7K's checker is authoritative, and the\nfollowing declared constraints are weaker here or absent entirely:\n\n  ChargeCard — nominal value: not expressed. 3 value types across 3 fields collapse to their base here (CardToken, CurrencyCode, OrderRef), so a payload validates with the right shape in the wrong field\n  Money.amount — range: not expressed. `range 0..` cannot be expressed over a string, which is how a decimal encodes so that it never round-trips through a double\n  Money.currency — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it",
+  "x-7k": {
+    "source": "7K",
+    "target": "JSON Schema 2020-12",
+    "message": "acme.shop.ChargeCard",
+    "version": "1.0",
+    "mode": "tolerant",
+    "intent": "command",
+    "losses": [
+      {
+        "construct": "range",
+        "at": "Money.amount",
+        "fidelity": "none",
+        "detail": "`range 0..` cannot be expressed over a string, which is how a decimal encodes so that it never round-trips through a double"
+      },
+      {
+        "construct": "normalize",
+        "at": "Money.currency",
+        "fidelity": "none",
+        "detail": "`normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it"
+      },
+      {
+        "construct": "nominal value",
+        "at": "ChargeCard",
+        "fidelity": "none",
+        "detail": "3 value types across 3 fields collapse to their base here (CardToken, CurrencyCode, OrderRef), so a payload validates with the right shape in the wrong field"
+      }
+    ]
+  },
+  "type": "object",
+  "properties": {
+    "orderId": {
+      "type": "string",
+      "examples": [
+        "ORD-1041"
+      ],
+      "minLength": 1,
+      "maxLength": 32,
+      "x-7k-role": "businessKey"
+    },
+    "amount": {
+      "$ref": "#/$defs/acme_shop_Money"
+    },
+    "card": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "orderId",
+    "amount",
+    "card"
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "acme_shop_Money": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "string",
+          "pattern": "^-?\\d{1,16}\\.\\d{2}$"
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 3
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "additionalProperties": true
+    }
+  }
+}
