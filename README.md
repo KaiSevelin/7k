@@ -342,7 +342,7 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 409 tests
+npm test            # 435 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 ```
 
@@ -350,8 +350,10 @@ npm run check       # parses, resolves and analyses the examples and the spec
 packages declared twice, dependency cycles between packages, tier violations, leaked `@internal` messages,
 broken envelope chains, orphaned messages, replies with no route, missing deduplication keys, a command
 fanned out to every subscriber or an event sent to only one, a consumer whose parallelism defeats its pipe's
-ordering, a role nothing claims, a command nothing in the model prompts, and a version pin that constrains
-deployment order. In a saga: a
+ordering, a role nothing claims, a command nothing in the model prompts, a version pin that constrains
+deployment order, two services sharing one subscription cursor, a filter reading what a broker cannot see or
+discarding what nobody else will take, an `@internal` scope that is not an ancestor, a message a pipe does not
+carry, a refinement that loosens its base, and an `upcast` for somebody else's message. In a saga: a
 step that does not handle a reply its send can produce, state read before anything assigns it, a wait
 nothing will ever end, an uncompensated step, a correlation key that is missing or identifies something
 else, a parent that gives up before its child's deadline, and a cycle of sagas starting each other. In a

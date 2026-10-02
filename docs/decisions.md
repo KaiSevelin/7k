@@ -2174,6 +2174,52 @@ analyses.
 
 ---
 
+## D86 — Batch two, and the two rules its false positives settled
+
+Seven more checks: `subscription-collision`, `filter-scope`, `filter-on-queue`,
+`internal-scope`, `unrouted-message`, `value-narrowing`, `foreign-mutation`. Two of them were
+wrong on the first run in ways worth recording, because both were wrong by being *too
+strict* — the failure mode that makes a checker unusable rather than merely incomplete.
+
+**A subscription name is unique per pipe, not per clause.** The first version grouped by
+`(pipe, name)` and reported every repeat, which flagged thirteen things in the examples —
+`OrderService` reading five message types from one topic, `ReceiptService` reading three.
+Those share a name because they *are* one subscription, dispatching on type, which is the
+ordinary shape of a consumer. The collision worth reporting is two different **services**
+sharing a name, because they would read one cursor between them and each see half the
+traffic; or one service reading the same message twice through the same name, which is a
+duplicated clause.
+
+**`filter-scope` cannot flag a bare path.** `where envelope.channel == Kiosk` lowers its
+right-hand side as a path, because an enum member and a field read are indistinguishable
+without types — and in an `invariant`, a bare path on the right genuinely *is* a field read.
+So the check flags `message` and `claim`, which are unambiguous. Nothing is lost: reading the
+body from a `where` has to be written `message.x`, and that is caught.
+
+Two more readings the prose left open:
+
+**`filter-on-queue`'s exhaustiveness is approximated, deliberately.** `03-topology.md` 2.5
+says to warn "unless the filters across that queue's subscriptions are exhaustive", and
+exhaustiveness over arbitrary predicates is undecidable. The decidable test: some subscription
+to that message takes it unfiltered, because that one catches whatever the others decline.
+
+**`foreign-mutation` can only check one of its three forms.** The prose names marking an
+imported declaration `@internal`, restating its version, and redeclaring it locally. The first
+is not expressible — there is nowhere to attach an annotation to a foreign declaration. The
+third is not a mutation: a same-named local declaration is a new declaration in a different
+package, and `pipe events` existing in both `acme.retail.sales` and `acme.retail.ticketing` is
+idiomatic rather than wrong. What is left, and what is checked, is an `upcast` for a message
+another package owns — a consumer writing a translation rule the owner never agreed to, which
+two importers could write differently. That is an adapter service's job.
+
+One finding: **`shop.7k`'s `commands` pipe did not carry `SettleDay`.** The message was added
+for the schedule two commits earlier and never added to the `carries` allowlist, which is a
+declared boundary contract. Nothing could have caught it before, and the scenarios passed
+regardless — the sandbox does not enforce `carries`, which is now a gap worth noting rather
+than a defect, since the checker refuses the model first.
+
+---
+
 ## Open questions
 
 Two remain. All others are resolved — see the decisions named.

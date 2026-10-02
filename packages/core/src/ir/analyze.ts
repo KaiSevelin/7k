@@ -17,7 +17,8 @@
  * Plus two that fall out of what the model already knows: `reply-without-emit`
  * and `missing-dedupe-key`.
  *
- * Two sibling modules hold the rest. `analyze-wiring.ts` has the ones that read a
+ * Three sibling modules hold the rest. `analyze-contract.ts` has the ones needing least
+ * context — a value against its base, a subscription against its own pipe. `analyze-wiring.ts` has the ones that read a
  * Contract-layer declaration against a Topology-layer one — an intent against a pipe kind,
  * an ordering key against a consumer's concurrency. `analyze-process.ts` has the ones that
  * need a saga, which ask a different question again: not whether the wiring is coherent,
@@ -25,6 +26,7 @@
  */
 
 import type { Diagnostic } from "../diagnostics.js";
+import { analyzeContract } from "./analyze-contract.js";
 import { analyzeProcess } from "./analyze-process.js";
 import { analyzeWiring } from "./analyze-wiring.js";
 import type { LinkedModel } from "./link.js";
@@ -54,6 +56,7 @@ export function analyze(model: LinkedModel): Diagnostic[] {
     ...orphanMessages(model),
     ...replyWithoutEmit(model),
     ...dedupeKeys(model),
+    ...analyzeContract(model),
     ...analyzeWiring(model),
     ...analyzeProcess(model),
   ];

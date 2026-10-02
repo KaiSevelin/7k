@@ -336,6 +336,11 @@ processes shares a single one.
 `as <name>` overrides it, for one service holding two independent subscriptions to the same pipe — a
 fast path and a slow batch path, say. Names must be unique per pipe.
 
+Unique *per pipe*, not per clause: one service with several `reacts` on one pipe shares a name across them,
+because that is one subscription reading several message types and dispatching on them. What
+`subscription-collision` reports is two **services** sharing a name — they would read one cursor between
+them, each seeing half the traffic — or one service reading the same message twice through the same name.
+
 ### 2.5 Subscription filters
 
 On a topic, a subscriber usually wants a subset of what is published. Brokers implement this natively —
@@ -380,7 +385,9 @@ Two hazards follow from that invisibility, and both are checked:
 - **A filter on a `queue` discards rather than redirects** (`filter-on-queue`). On a `topic`, filtering
   means "do not deliver to me" and other subscribers still receive their copy. On a `queue` a message is
   consumed once, so if the only subscription filters it out the message is silently gone. Warned unless the
-  filters across that queue's subscriptions are exhaustive.
+  filters across that queue's subscriptions are exhaustive — which over arbitrary predicates is not
+  decidable, so the test is whether **some** subscription to that message takes it unfiltered. One that
+  does catches whatever the others decline.
 
 Distinguish it from `requires`: `where` decides **whether this subscriber cares**, `requires` decides
 **whether the sender was allowed**. A `where` miss is silence; a `requires` failure is a rejection.

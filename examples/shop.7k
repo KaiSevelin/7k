@@ -144,7 +144,7 @@ pipe inbound : queue {
 
 pipe commands : queue {
   ordering by customerId
-  carries  ChargeCard, RefundCard, ArrangeShipment
+  carries  ChargeCard, RefundCard, ArrangeShipment, SettleDay
 }
 
 pipe events : topic {
