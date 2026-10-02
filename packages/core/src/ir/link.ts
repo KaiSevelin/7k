@@ -265,6 +265,12 @@ export function link(input: LinkInput): LinkResult {
  * A model whose references answer `resolve`. Kept as a lookup rather than by
  * rewriting the tree, so the IR stays immutable and a reference's identity is
  * stable across passes.
+ *
+ * **A reference belongs to the model it was lowered with.** Resolution is keyed by the `Ref` object
+ * itself, so passing a declaration from one `buildWorkspace` to another model's `resolve` or `declFor`
+ * answers `undefined` — indistinguishable from a name that did not resolve. A tool that mixed two
+ * workspaces would therefore render a perfectly good model as entirely unresolved, which is a sharp edge
+ * worth knowing about: a model and its declarations only mean anything as a pair.
  */
 export interface LinkedModel extends Model {
   resolve(ref: Ref): NodeId | undefined;
