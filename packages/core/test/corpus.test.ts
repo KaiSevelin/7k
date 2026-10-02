@@ -10,9 +10,12 @@ const SPEC = join(ROOT, "docs", "spec");
 const read = (p: string): string => readFileSync(p, "utf8");
 const rel = (p: string): string => relative(ROOT, p).replaceAll("\\", "/");
 
-const exampleFiles = readdirSync(EXAMPLES)
-  .filter((f) => f.endsWith(".7k"))
-  .map((f) => join(EXAMPLES, f));
+// `withFileTypes`, because the sidecar directory is called `.7k` and so matches a filter for files
+// ending `.7k` — which is how this read a directory and failed with EISDIR the first time an example
+// workspace had one (D97).
+const exampleFiles = readdirSync(EXAMPLES, { withFileTypes: true })
+  .filter((e) => e.isFile() && e.name.endsWith(".7k"))
+  .map((e) => join(EXAMPLES, e.name));
 
 const specFiles = [
   ...readdirSync(SPEC)

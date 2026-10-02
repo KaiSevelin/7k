@@ -42,7 +42,11 @@ function walk(target: string, out: string[]): void {
     return;
   }
   for (const entry of readdirSync(target)) {
-    if (entry === "node_modules" || entry === ".git" || entry === "dist") continue;
+    if (entry === "node_modules" || entry === "dist") continue;
+    // Every dotted directory, which covers `.git`, `.github` and — the one that matters — `.7k`,
+    // where the sidecars live. Those are tooling state rather than sources, and the directory's name
+    // ends in `.7k`, so anything matching on the extension has to exclude it deliberately (D97).
+    if (entry.startsWith(".")) continue;
     walk(join(target, entry), out);
   }
 }

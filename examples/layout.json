@@ -1,28 +1,57 @@
 {
-  "_comment": "Lives at .7k/layout.json. Where things are drawn, per view, with `*` for the whole model through no lens. See ../docs/spec/20-ir.md section 6.2. Deleting this file loses saved positions and nothing else: every missing node falls back to auto-layout, one node at a time, so adding a service never reshuffles the rest.",
-
+  "_comment": "Lives at .7k/layout.json. Where things are drawn, per view, with `*` for the whole model through no lens. See ../docs/spec/20-ir.md section 6.2. Deleting this file loses saved positions and nothing else: every missing node falls back to auto-layout, one node at a time, so adding a service never reshuffles the rest. This copy is an illustration of the format, kept here because a real .7k/layout.json is per-developer and gitignored - unlike views.json, which is shared and so lives at .7k/views.json for real.",
   "*": {
-    "collapsed": ["package:acme.retail.ticketing"],
+    "collapsed": [
+      "package:acme.retail.ticketing"
+    ],
     "nodes": {
-      "service:acme.retail.sales.OrderService": { "x": 80, "y": 40 },
-      "service:acme.retail.sales.KioskBridge": { "x": 320, "y": 40 },
-      "service:acme.retail.sales.Reporting": { "x": 560, "y": 40 },
-      "pipe:acme.retail.sales.events": { "x": 320, "y": 200 },
-      "package:acme.retail.ticketing": { "x": 320, "y": 360 }
+      "service:acme.retail.sales.OrderService": {
+        "x": 80,
+        "y": 40
+      },
+      "service:acme.retail.sales.KioskBridge": {
+        "x": 320,
+        "y": 40
+      },
+      "service:acme.retail.sales.Reporting": {
+        "x": 560,
+        "y": 40
+      },
+      "pipe:acme.retail.sales.events": {
+        "x": 320,
+        "y": 200
+      },
+      "package:acme.retail.ticketing": {
+        "x": 320,
+        "y": 360
+      }
     },
     "edges": {
       "service:acme.retail.sales.OrderService -> pipe:acme.retail.ticketing.commands": {
-        "waypoints": [{ "x": 160, "y": 300 }]
+        "waypoints": [
+          {
+            "x": 160,
+            "y": 300
+          }
+        ]
       }
     }
   },
-
   "WebFlow": {
     "collapsed": [],
     "nodes": {
-      "service:acme.retail.sales.OrderService": { "x": 80, "y": 40 },
-      "pipe:acme.retail.ticketing.commands": { "x": 80, "y": 220 },
-      "service:acme.retail.ticketing.TicketService": { "x": 80, "y": 400 }
+      "service:acme.retail.sales.OrderService": {
+        "x": 80,
+        "y": 40
+      },
+      "pipe:acme.retail.ticketing.commands": {
+        "x": 80,
+        "y": 220
+      },
+      "service:acme.retail.ticketing.TicketService": {
+        "x": 80,
+        "y": 400
+      }
     }
   }
 }

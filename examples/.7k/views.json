@@ -1,0 +1,28 @@
+{
+  "_comment": "The example workspace's named lenses, at the path 20-ir.md section 6.1 specifies and Spider reads. Presentation, not language: a saved filter on the diagram, feeding no analysis. Committed, unlike the other two sidecars, because named lenses are worth sharing while layout coordinates and composer hints are per-developer. Deleting this file loses saved lenses and nothing else.",
+  "WebFlow": {
+    "include": [
+      "package:acme.retail.sales",
+      "package:acme.retail.ticketing"
+    ],
+    "exclude": [
+      "service:KioskBridge"
+    ]
+  },
+  "PiiFlow": {
+    "include": [
+      "label:pii"
+    ]
+  },
+  "Perimeter": {
+    "include": [
+      "label:external"
+    ]
+  },
+  "TicketingOps": {
+    "include": [
+      "package:acme.retail.ticketing",
+      "pipe:acme.retail.ticketing.commands.dead"
+    ]
+  }
+}
