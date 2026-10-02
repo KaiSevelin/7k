@@ -389,6 +389,13 @@ of what it could not express:
 [examples/schema/](examples/schema/) and verified by CI, so a constraint change shows up as a schema diff —
 which is where somebody notices a partner's validation getting weaker.
 
+**Looking at a model.** Spider lives in its own repository:
+[KaiSevelin/7k-spider](https://github.com/KaiSevelin/7k-spider). Three views over a model and a trace of it
+running — a graph of who talks to whom, a sequence of what followed what, and a timeline of when — where
+selecting in one highlights in all three. It reads the model through `@sevenk/core` and a trace as NDJSON,
+never the sandbox directly, which is the point of the trace being a published artifact. Early: the selection
+model is built, the views are not.
+
 **Editing `.7k` files.** The VS Code extension lives in its own repository:
 [KaiSevelin/7k-vscode](https://github.com/KaiSevelin/7k-vscode). It gives highlighting, diagnostics
 across the whole workspace, completion of your own declared names, go-to-definition, hover and an
