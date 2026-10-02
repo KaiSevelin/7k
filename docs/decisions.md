@@ -2716,6 +2716,62 @@ and now `saga Flow v1.0 @pii` — because the version is part of the name.
 
 ---
 
+## D97 — Contract semantics live in Core, not in a runtime
+
+What a `length 3..254` admits, what `normalize trim` does, what a `where` denotes, whether an invariant
+holds. All of it lived in the sandbox, and all of it is what the **language** means.
+
+`ir/scenario.ts` states the principle for the scenario IR already: "If each runtime interpreted the tree
+itself, two runtimes could diverge on what a scenario means, and the suite would prove nothing." A
+subscription filter is exactly such a tree, and a payload's validity is exactly such a question — so the
+argument applied and had simply never been carried through. The sandbox is one producer among several; a
+second implementation of `evaluate` would have made the conformance suite an agreement between two
+copies rather than a check against a definition.
+
+Spider's composer was about to be that second implementation, which is the fifth time a gap has surfaced
+this way: upcasts (D88), invariants (D89), projections (D90), the trace format (D93), label propagation
+(D95).
+
+### Where the line falls
+
+`packages/core/src/contract/` takes what the **contract** decides:
+
+- **`evaluate.ts`** — what a predicate denotes. Against a `PayloadView` of three tiers — body, envelope,
+  claims — rather than a runtime's own message type, because canonical JSON keeps them separate
+  (`01-kernel.md` 7.3) and a filter may read one and not another.
+- **`value.ts`** — a `Spec`, which is a type plus the constraints that narrow it resolved through
+  whatever chain of declarations it came from; the bounds a constraint carries; normalization; validation;
+  invariant checking.
+
+The sandbox keeps what a **runtime** decides, which turned out to be a clean cut at a single point in the
+file: generating a value from a seeded RNG, resolving a `"$auto"` directive against a virtual clock,
+preparing a body and an envelope for the wire. 980 lines became 411; `message.ts`'s 198 became 58 plus one
+adapter, since its `Message` is structurally a `PayloadView` plus `from`.
+
+Two things went the other way on inspection. **`ALPHANUM`** — the alphabet an invented string is drawn
+from — is a fact about generating a value, not about a contract, so it stayed behind. And **`window`
+became `windowOf`**, because a function called `window` exported from a package that runs in a browser is
+a trap waiting for someone.
+
+### How the move was checked
+
+**The sandbox's 162 tests passed untouched.** That is the whole of the evidence, and it is the same gate
+the `restrict` extraction used in Spider: a refactor that claims to change no behaviour should be able to
+prove it against a suite written before it.
+
+Core gained 21 tests of its own, pinning the surface it now publishes rather than re-testing what the
+sandbox already covers — `7k project` produces a byte-identical set of schemas, so nothing downstream
+moved either.
+
+### What this makes possible
+
+A composer that validates against the contract rather than against a projection of it. The JSON Schema
+projection is lossy by design (D90) — no invariants, no nominal types — so a composer validating against
+a generated schema would accept payloads the model forbids and would have no way to say so. Validating
+against Core means the composer is as strict as the checker, which is the only useful thing for it to be.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -2739,6 +2795,7 @@ One remains. All others are resolved — see the decisions named.
 | Boundary detection derived in two places, differently | D94 — `ir/topology.ts`, with the narrow question named separately |
 | Labels specified to propagate and never computed | D95 — `ir/labels.ts`, field to record to message to pipe |
 | Annotation placement undocumented and inconsistent | D96 — after the name on every declaration, and in the grammar |
+| Predicate and payload semantics in a runtime | D97 — `core/src/contract/`, with the sandbox's 162 tests as the gate |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |
