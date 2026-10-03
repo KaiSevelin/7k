@@ -175,7 +175,7 @@ service TicketService {
 
 | Clause | Default | Meaning |
 |---|---|---|
-| `emits M to P` | — | this service publishes `M` on pipe `P`, whether in response to something or not |
+| `emits M to P [atomic\|best-effort]` | atomic | this service publishes `M` on pipe `P`, whether in response to something or not. `best-effort` says the publication may be lost even though the work that caused it completed; see 2.9 |
 | `reacts M from P [as <name>]` | the subscription name defaults to the service name | this service **consumes** `M` from pipe `P`. Consuming is not responding; the response, if any, is `replies`. `as` names the subscription (2.4) and sits on this line rather than inside the braces, because it identifies the subscription rather than configuring it |
 | `accepts v<range>` | the current major | version range this handler understands |
 | `once per <path>` \| `once per none` | the message's `@role(businessKey)` field | deduplication scope, or a claim of natural idempotence; see 2.8 |
@@ -508,6 +508,54 @@ author makes deliberately, and an implementation generates no deduplication stor
 on every send attempt, `@role(businessKey)` on that field is decorative — each retry looks like a new
 message. The key has to derive from business identity, and nothing in the model can tell the difference.
 
+### 2.9 Publication
+
+> **A publication is atomic with the work that caused it, unless it says otherwise.**
+
+Everything above this section is about what happens to a message **once it is on a pipe**. This is about
+whether it gets onto one at all.
+
+The failure it names is the central one in a message-driven system. A handler receives a message, does its
+work, commits — and the message it was supposed to emit never appears. No delivery guarantee helps,
+because delivery never started. No `once per` key helps, because nothing arrived to deduplicate. No dead
+letter mentions it, because there is nothing to dead-letter. **A message lost in transit at least
+existed; one that was never published leaves nothing behind at all.**
+
+| | |
+|---|---|
+| *(nothing written)* | **atomic** — the message appears on the pipe if and only if the handling that produced it completed |
+| `best-effort` | it may be lost even though the handling completed |
+
+```7k
+service OrderService {
+  emits OrderPlaced to events                 // atomic, because that is the default
+  emits PageViewed  to telemetry best-effort  // and this one says what it is
+}
+```
+
+`atomic` may be written out where an emit is important enough to be emphatic about. Both forms mean the
+same thing, like `delivery at-least-once` on a pipe.
+
+**Why this is in the language at all**, when a service's datastore is not (2.0): the test in 2.0 is
+enforceability, and this passes it three ways. The guarantee is about what *another service observes*, so
+it is interface rather than internal. Codegen owns the wire, so it is enforced by the same thing that
+enforces a `once per` key — the generated producer either writes through a transactional outbox or it does
+not. And it is **simulable**: a runtime can lose a `best-effort` publication and show you what happens,
+which is the test that keeps declarations from rotting.
+
+What 7K does *not* say is how. An outbox table, a transactional broker, a change-data-capture stream and
+a two-phase commit all satisfy `atomic`, and choosing between them is an implementation's business
+(`00-overview.md`). An implementation that cannot satisfy it **must fail rather than weaken**, as with
+every other guarantee.
+
+**`lossy-publish`** is an error when a `best-effort` publication is something that is waited for: a saga
+starts on it, a step awaits it, or it is a `@command`. A command exists to instruct, so a lost one is an
+instruction that never happened. It is the sibling of `liveness-over-lossy-pipe`, on the other axis.
+
+Which leaves `best-effort` for what it is for: telemetry, metrics, cache invalidations, notifications a
+person would merely like — the messages whose loss is a smaller problem than the cost of making them
+reliable.
+
 ## 3. Claims
 
 7K does not know about JWT. Authorization is a predicate over abstract claims, which an implementation
@@ -706,6 +754,8 @@ layer. Grammar is in `10-grammar.md`; this is the index.
 | Word | Means |
 |---|---|
 | `emits M to P` | this service publishes `M` on pipe `P` |
+| `best-effort` | the publication may be lost even though the work that caused it completed (2.9) |
+| `atomic` | and the default: it appears if and only if that work completed |
 | `reacts M from P` | this service **consumes** `M` from `P` — consuming, not responding |
 | `as <name>` | names this subscription; defaults to the service name (2.4) |
 | `accepts` | the version range this handler understands |

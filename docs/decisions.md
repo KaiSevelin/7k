@@ -2846,6 +2846,91 @@ and Spider's own design document had repeated it as an open question. It was ans
 
 ---
 
+## D99 — A publication is atomic with the work that caused it
+
+Every guarantee in the Topology layer was about what happens to a message **once it is on a pipe**.
+Nothing said whether it gets onto one at all.
+
+That is the central correctness problem in a message-driven system, and it was inexpressible. A handler
+receives a message, does its work, commits — and the message it was supposed to emit never appears. No
+delivery guarantee helps, because delivery never started. No `once per` key helps, because nothing
+arrived to deduplicate. No dead letter mentions it, because there is nothing to dead-letter. **A message
+lost in transit at least existed; one that was never published leaves nothing behind at all.**
+
+```7k
+service OrderService {
+  emits OrderPlaced to events                 // atomic, because that is the default
+  emits PageViewed  to telemetry best-effort  // and this one says what it is
+}
+```
+
+Atomic by default, `best-effort` written out, by the rule `00-overview.md` already states: "defaults are
+the safe choice", and "you write the dangerous option rather than the careful one".
+
+### Why this belongs in the language, when a datastore does not
+
+`03-topology.md` 2.0 excludes a service's internals on one test — enforceability — and this passes it
+three ways.
+
+**The guarantee is interface, not internal.** It is a statement about what *another service observes*: a
+message either appears or it does not. How a producer achieves that — an outbox table, a transactional
+broker, change-data-capture, two-phase commit — is an implementation's business, and 7K names none of
+them.
+
+**Codegen owns it.** The generated producer either writes through an outbox or it does not. That is the
+same thing enforcing a `once per` key, and an implementation that cannot satisfy `atomic` must fail
+rather than weaken, like every other guarantee.
+
+**It is simulable**, which is the test that keeps a declaration from rotting. The sandbox loses a
+`best-effort` publication under `chaos`, seeded, and traces it as `unpublished`.
+
+### `lossy-publish`
+
+An error when a `best-effort` publication is something that is waited for: a saga starts on it, a step
+awaits it, or it is a `@command` — which exists to instruct, so a lost one is an instruction that never
+happened.
+
+The sibling of `liveness-over-lossy-pipe` on the other axis, and an error for the same reason. That
+leaves `best-effort` for what it is for: telemetry, metrics, cache invalidations, notifications a person
+would merely like — the messages whose loss is a smaller problem than the cost of making them reliable.
+
+### `unpublished` is a new trace kind, not a reuse of `dropped`
+
+`dropped` is a message that existed on a pipe and was lost in transit: the pipe's doing, and there is a
+dead letter or a redelivery to reason about. `unpublished` never reached a pipe: the producer's doing,
+and there is nothing anywhere. A consumer of a trace has to be able to tell those apart, so reusing one
+kind for both would have been a small lie in a published artifact (D93).
+
+### Two lossinesses, side by side
+
+The example workspace now has both on one service:
+
+```7k
+pipe telemetry : topic {
+  delivery at-most-once        // a reading that is sent may be lost in transit
+  dlq      none
+}
+
+service DoorController @external {
+  emits DoorSensed to telemetry best-effort   // and one may never be sent at all
+}
+```
+
+They are different axes and they compose. Spider draws the pipe dashed and the publication dotted, for
+the same reason: a reader needs to know which of the two is the risk.
+
+### What this does not do
+
+It says nothing about **ordering between a state change and a publication**, because there is nothing to
+say: atomic means both or neither, and a model that could express "published first, committed second"
+could express a system nobody should build.
+
+It also says nothing about the **consumer's** side of the same problem — a handler that acknowledges
+before its work commits. That is the mirror image, it is equally real, and `once per` plus
+`at-least-once` already make a redelivery survivable, so it is left where it is.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -2871,6 +2956,7 @@ One remains. All others are resolved — see the decisions named.
 | Annotation placement undocumented and inconsistent | D96 — after the name on every declaration, and in the grammar |
 | Predicate and payload semantics in a runtime | D97 — `core/src/contract/`, with the sandbox's 162 tests as the gate |
 | The mutation API specified and unimplemented | D98 — `core/src/mutate/`, with section 7.2's properties true by construction |
+| Producer atomicity inexpressible | D99 — `emits … best-effort`, atomic by default, with `lossy-publish` |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |

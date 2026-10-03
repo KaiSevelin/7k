@@ -70,6 +70,12 @@ const PARTS: Readonly<Record<TraceKind, Partial<TraceEvent>>> = {
     reason: "discarded",
     detail: "`delivery at-most-once` with `dlq none`, so there is nowhere for it to go",
   },
+  unpublished: {
+    message: "acme.retail.ticketing.SeatInventoryChanged",
+    pipe: TELEMETRY,
+    service: SVC,
+    detail: "`emits SeatInventoryChanged to telemetry best-effort`, and the publication was lost",
+  },
   upcast: on({
     message: "acme.retail.ticketing.TicketIssued",
     pipe: TOPIC,

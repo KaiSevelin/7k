@@ -94,6 +94,7 @@ export const KEYWORD_ROLES: ReadonlyMap<string, KeywordRole> = new Map(
       ["value", [
         "queue", "topic", "stream",
         "at-most-once", "at-least-once", "effectively-once",
+        "atomic", "best-effort",
         "none", "linear", "skip", "all",
         "complete", "reject", "abandon", "hang", "fail", "unchecked", "absent",
         "true", "false",
@@ -134,6 +135,7 @@ export const HYPHENATED_KEYWORDS: readonly string[] = [
   "at-most-once",
   "at-least-once",
   "effectively-once",
+  "best-effort",
 ];
 
 /** Multi-character punctuation, longest first so maximal munch is correct. */

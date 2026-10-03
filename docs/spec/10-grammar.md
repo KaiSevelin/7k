@@ -281,7 +281,7 @@ deliveryMode = "at-most-once" | "at-least-once"
 
 serviceDecl  = anns "service" ident body( serviceItem ) ;
 serviceItem  = emitsStmt | reactsStmt ;
-emitsStmt    = "emits"  msgRef "to"   pipeRef ;
+emitsStmt    = "emits"  msgRef "to"   pipeRef [ "atomic" | "best-effort" ] ;
 reactsStmt   = "reacts" msgRef "from" pipeRef [ "as" ident ]
                body( reactAttr ) ;
 reactAttr    = "accepts"     versionRange

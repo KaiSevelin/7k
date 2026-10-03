@@ -175,6 +175,18 @@ export interface UpcastIr extends DeclBase {
 
 export type Delivery = "at-most-once" | "at-least-once" | "effectively-once";
 
+/**
+ * How a publication relates to the work that produced it (`03-topology.md` 2.9).
+ *
+ * `atomic`: the message appears on the pipe if and only if the handling that produced it completed.
+ * `best-effort`: it may be lost even though the handling completed — a message that never existed, which
+ * no retry, dead letter or deduplication key can recover.
+ *
+ * Atomic is the default because it is the safe reading, and `best-effort` is written out because it is the
+ * dangerous one.
+ */
+export type Publication = "atomic" | "best-effort";
+
 export interface PipeIr extends DeclBase {
   readonly kind: "pipe";
   readonly pipeKind: "queue" | "topic" | "stream";
@@ -192,6 +204,13 @@ export interface PipeIr extends DeclBase {
 export interface EmitIr {
   readonly message: Ref;
   readonly pipe: Ref;
+  /**
+   * Whether this publication is atomic with the work that caused it.
+   *
+   * Always present: the default is applied at lowering, as `PipeIr.delivery` is, so no analysis has to
+   * remember which way absence reads.
+   */
+  readonly publication: Publication;
   /**
    * The version this producer sends, where it pins one: `emits TicketIssued v1.0 to events`.
    * Absent means the message's own declared version, which is the ordinary case.

@@ -38,6 +38,7 @@ export function analyzeVersions(model: LinkedModel): Diagnostic[] {
     ...dedupWindows(model),
     ...subjectChecksInside(model),
     ...sagaOverFilters(model),
+    ...lossyPublications(model),
   ];
 }
 
@@ -316,6 +317,76 @@ function claimAgainstEnvelope(predicate: Predicate): { claim: string; field: str
  * set, not only the subject. A service credential carries the service's scopes, not a user's
  * tenant.
  */
+/**
+ * A `best-effort` publication of a message something waits for.
+ *
+ * The sibling of `liveness-over-lossy-pipe`, on the other axis. That one says nothing may depend on a
+ * lossy *pipe* for progress; this says nothing may depend on a lossy *publication* — and the failure is
+ * the worse of the two. A message lost in transit at least existed, so a dead letter or a redelivery can
+ * mention it; a message that was never published leaves nothing behind at all, and no retry, dead letter
+ * or `once per` key can recover one.
+ *
+ * Three things count as waiting for it: a saga that starts on it, a step that awaits it, and a `@command`,
+ * which exists to instruct and whose loss means the instruction never happened.
+ */
+function lossyPublications(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  /** What waits for a message, by `symbolKey`, and why in words. */
+  const awaited = new Map<string, string>();
+
+  for (const saga of sagasOf(model)) {
+    const start = saga.start === undefined ? undefined : model.resolve(saga.start.message);
+    if (start !== undefined) {
+      awaited.set(
+        symbolKey(start.pkg, start.name),
+        `\`${saga.id.name}\` starts on it, so a lost one is a process that never began`,
+      );
+    }
+    for (const step of saga.steps) {
+      for (const one of step.awaits) {
+        const id = model.resolve(one.message);
+        if (id === undefined) continue;
+        awaited.set(
+          symbolKey(id.pkg, id.name),
+          `step \`${step.name}\` of \`${saga.id.name}\` awaits it, so a lost one is an instance that ` +
+            "waits until its timeout",
+        );
+      }
+    }
+  }
+
+  for (const decl of model.decls) {
+    if (decl.kind !== "message" || decl.intent !== "command") continue;
+    const key = symbolKey(decl.id.pkg, decl.id.name);
+    if (awaited.has(key)) continue;
+    awaited.set(
+      key,
+      "it is a `@command`, which exists to instruct — a lost one is an instruction that never happened",
+    );
+  }
+
+  for (const service of servicesOf(model)) {
+    for (const emit of service.emits) {
+      if (emit.publication !== "best-effort") continue;
+      const id = model.resolve(emit.message);
+      if (id === undefined) continue;
+      const why = awaited.get(symbolKey(id.pkg, id.name));
+      if (why === undefined) continue;
+
+      out.push({
+        code: "lossy-publish",
+        severity: "error",
+        message:
+          `\`${service.id.name}\` emits \`${emit.message.text}\` \`best-effort\`, and ${why}`,
+        span: emit.span,
+      });
+    }
+  }
+
+  return out;
+}
+
 function subjectChecksInside(model: LinkedModel): Diagnostic[] {
   const out: Diagnostic[] = [];
 

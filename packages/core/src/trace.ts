@@ -52,6 +52,15 @@ export const TRACE_KINDS = [
   "dead-lettered",
   /** Lost: an `at-most-once` pipe, so there is nowhere for it to go. */
   "dropped",
+  /**
+   * Never published: a `best-effort` emit whose publication was lost although the work completed
+   * (`03-topology.md` 2.9).
+   *
+   * Distinct from `dropped`, which is a message that existed on a pipe and was lost in transit. This one
+   * never reached a pipe, so there is no dead letter to find it in and no redelivery to expect — which is
+   * exactly why a consumer has to be able to tell the two apart.
+   */
+  "unpublished",
   /** An older message was translated to the version its consumer understands. */
   "upcast",
   /** The clock moved. */
@@ -214,6 +223,8 @@ export const TRACE_SHAPE: Readonly<Record<TraceKind, readonly (keyof TraceEvent)
   retrying: ["message", "pipe", "service", "subscription", "id", "attempt"],
   "dead-lettered": ["message", "pipe", "service", "subscription", "id", "reason"],
   dropped: ["message", "pipe", "reason"],
+  // No `reason`: the kind is the reason, and `detail` says which emit it was.
+  unpublished: ["message", "pipe", "service", "detail"],
   upcast: ["message", "pipe", "service", "subscription", "id", "detail"],
   advanced: ["detail"],
 

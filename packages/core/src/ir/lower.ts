@@ -455,6 +455,10 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
           message: ref(ctx, childNodes(e, "MsgRef")[0]) ?? { to: null, text: "", span },
           pipe: ref(ctx, childNodes(e, "PipeRef")[0]) ?? { to: null, text: "", span },
           ...(pinned === undefined ? {} : { version: pinned }),
+          // Absent reads as atomic, which is the safe one. Resolved here so no analysis has to know.
+          publication: childTokens(e).some((t) => t.keyword === "best-effort")
+            ? "best-effort"
+            : "atomic",
           span: spanOf(ctx.file, e),
         };
       });

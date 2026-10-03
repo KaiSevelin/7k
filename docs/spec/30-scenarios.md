@@ -355,6 +355,7 @@ Closed. A scenario matches on these and a consumer renders them; an open set wou
 | `retrying` | `message` `pipe` `service` `subscription` `id` `attempt` | another attempt is coming |
 | `dead-lettered` | `message` `pipe` `service` `subscription` `id` `reason` | moved to `<pipe>.dead` |
 | `dropped` | `message` `pipe` `reason` | lost: an `at-most-once` pipe, so there is nowhere for it to go |
+| `unpublished` | `message` `pipe` `service` `detail` | never published: a `best-effort` emit whose publication was lost although the work completed (`03-topology.md` 2.9). Unlike `dropped`, it never reached a pipe, so no dead letter holds it and no redelivery is coming |
 | `upcast` | `message` `pipe` `service` `subscription` `id` `detail` | translated to the version its consumer understands |
 | `advanced` | `detail` | the clock moved |
 

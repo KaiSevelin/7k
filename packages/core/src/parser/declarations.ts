@@ -262,7 +262,12 @@ const REACT_ATTRS: ClauseTable = {
 
 const SERVICE_ITEMS = (c: Cursor): CstNode | undefined => {
   if (c.atKeyword("emits")) {
-    return node("EmitsStmt", [c.advance(), msgRef(c), c.expectKeyword("to"), pipeRef(c)]);
+    const parts: CstChild[] = [c.advance(), msgRef(c), c.expectKeyword("to"), pipeRef(c)];
+    // An optional trailing word, like `as <name>` on a `reacts`: it identifies the guarantee on this
+    // publication rather than configuring the message or the pipe.
+    const how = c.eatKeyword("atomic") ?? c.eatKeyword("best-effort");
+    if (how !== undefined) parts.push(how);
+    return node("EmitsStmt", parts);
   }
   if (c.atKeyword("reacts")) {
     const parts: CstChild[] = [c.advance(), msgRef(c), c.expectKeyword("from"), pipeRef(c)];
