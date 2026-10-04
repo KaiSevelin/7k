@@ -342,7 +342,7 @@ scenario CardDeclinedRefundsNothing {
 
 ```
 npm install
-npm test            # 643 tests
+npm test            # 647 tests
 npm run check       # parses, resolves and analyses the examples and the spec
 npm run project     # writes JSON Schema for the examples, into examples/schema
 npm run fixture     # regenerates examples/trace.ndjson, the trace-format fixture

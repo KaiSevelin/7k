@@ -331,6 +331,7 @@ Everything beyond the four above depends on the kind. 7.4 says which are require
 | `claims` | object | the claims the sender presented |
 | `saga` | string | **qualified** |
 | `sagaKey` | string | the instance key, which is not the correlation id (`04-process.md` 1.1) |
+| `step` | string | the step a saga event concerns, by name. On a terminal event, the step whose action ended the instance — absent when no step did |
 | `schedule` | string | **qualified** |
 
 `iso` duplicates `at`, which is a second source of truth and would normally be refused. It survives because a
@@ -365,13 +366,13 @@ Closed. A scenario matches on these and a consumer renders them; an open set wou
 |---|---|---|
 | `saga-started` | | an instance was created by its start message |
 | `saga-redundant-start` | `message` | a start message arrived for a key that already had an instance |
-| `saga-advanced` | `message` | an awaited message reached the instance and its step's action ran |
-| `saga-timeout` | `detail` | a step waited longer than its declared timeout |
+| `saga-advanced` | `message` `step` | an awaited message reached the instance and its step's action ran |
+| `saga-timeout` | `step` | a step waited longer than its declared timeout |
 | `saga-completed` | | |
 | `saga-rejected` | `detail` | |
 | `saga-abandoned` | `detail` | |
-| `saga-compensating` | `message` | a completed step's inverse was sent while unwinding |
-| `saga-irreversible` | `detail` | a completed step declared `undo none`, so unwinding skipped it |
+| `saga-compensating` | `message` `step` | a completed step's inverse was sent while unwinding |
+| `saga-irreversible` | `step` | a completed step declared `undo none`, so unwinding skipped it |
 
 **Time.** Every one carries `schedule` and `message`.
 
@@ -380,6 +381,24 @@ Closed. A scenario matches on these and a consumer renders them; an open set wou
 | `schedule-fired` | | an occurrence fired |
 | `schedule-overrun` | `detail` | an occurrence came due while the previous one was still in flight |
 | `schedule-missed` | `detail` | occurrences a gap swallowed, resolved by `onMissed` |
+
+**Which steps completed.** `saga-advanced` says a step's **action ran**, which includes an action that
+rejected — so the events alone do not say whether the step succeeded. The rule that settles it:
+
+> A step completed if a `saga-advanced` named it and it is **not** the step named on the instance's
+> terminal event.
+
+A terminal event names a step when a step's action ended the instance, and names none when a deadline
+did. So an instance that rejected inside `charge` has `saga-advanced` and `saga-rejected` both naming
+`charge`, and `charge` did not complete; one that rejected in `ship` after `charge` succeeded names
+`ship`, and `charge` did. An instance a deadline abandoned names no step, and everything that advanced
+had completed.
+
+This is stated rather than left to be inferred because the question it answers — which steps will be
+compensated — is the one a saga exists to get right, and because the obvious reading of
+`saga-advanced` gets it wrong. The step name is **data** in `step`, never parsed out of `detail`: the
+prose there is for a reader, and a consumer that matched on it would break the moment the wording
+improved.
 
 A saga event names no pipe or service. A saga is hosted by a service (`04-process.md` 1.2), but the event is
 about the instance, and a consumer that wants the host reads the model.

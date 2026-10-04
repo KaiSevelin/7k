@@ -228,6 +228,44 @@ describe("validating", () => {
   });
 });
 
+describe("`step` on a saga event", () => {
+  it("is where a step name lives, which `detail` is not", () => {
+    // `detail` is prose and the format says never to match on it. Before this field the step name
+    // was only in there, so the one consumer that needed it had to parse prose to get it.
+    expect(TRACE_FIELD_ORDER).toContain("step");
+    expect(TRACE_SHAPE["saga-advanced"]).toContain("step");
+    expect(TRACE_SHAPE["saga-timeout"]).toContain("step");
+    expect(TRACE_SHAPE["saga-compensating"]).toContain("step");
+    expect(TRACE_SHAPE["saga-irreversible"]).toContain("step");
+  });
+
+  it("is not required on a terminal, because a deadline ends a saga outside any step", () => {
+    // The absence is load bearing: it is what tells "this step failed" from "the clock ran out".
+    for (const kind of ["saga-completed", "saga-rejected", "saga-abandoned"] as const) {
+      expect(TRACE_SHAPE[kind]).not.toContain("step");
+    }
+    expect(
+      validateTrace([
+        base({ kind: "saga-abandoned", saga: "a.S", sagaKey: "K-1", detail: "deadline elapsed" }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("is reported when a kind that needs it does without", () => {
+    const problems = validateTrace([
+      base({ kind: "saga-advanced", saga: "a.S", sagaKey: "K-1", message: "a.M" }),
+    ]);
+    expect(problems.map((p) => p.message)).toEqual(["R#1#0 (saga-advanced): missing `step`"]);
+  });
+
+  it("is written in field order, between the instance key and the schedule", () => {
+    const line = writeTraceEvent(
+      base({ kind: "saga-advanced", saga: "a.S", sagaKey: "K-1", message: "a.M", step: "charge" }),
+    );
+    expect(Object.keys(JSON.parse(line)).slice(-3)).toEqual(["saga", "sagaKey", "step"]);
+  });
+});
+
 describe("the checked-in fixture", () => {
   const text = readFileSync(new URL("../../../examples/trace.ndjson", import.meta.url), "utf-8");
   const { events, problems } = readTrace(text);

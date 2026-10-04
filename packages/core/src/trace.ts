@@ -181,6 +181,18 @@ export interface TraceEvent {
   readonly saga?: string;
   /** The instance key, which is not the correlation id (`04-process.md` 1.1). */
   readonly sagaKey?: string;
+  /**
+   * The step a saga event concerns, by name.
+   *
+   * Data, not prose. It was only ever inside `detail` before, which this format says is for a human
+   * and never to be matched on — so a consumer reconstructing where an instance got to had to parse
+   * the prose, which is exactly the coupling `detail` exists to prevent.
+   *
+   * On a terminal event it names the step whose action ended the instance, and is **absent** when no
+   * step did: a deadline abandons a saga from outside any step. That absence is what makes the
+   * completion rule in `30-scenarios.md` 7.4 decidable.
+   */
+  readonly step?: string;
   /** The schedule, qualified. */
   readonly schedule?: string;
 }
@@ -199,7 +211,7 @@ export const TRACE_FIELD_ORDER = [
   "run", "seq", "at", "iso", "kind",
   "message", "pipe", "service", "subscription", "id", "attempt",
   "reason", "detail",
-  "saga", "sagaKey", "schedule",
+  "saga", "sagaKey", "step", "schedule",
   "claims", "envelope", "body",
 ] as const satisfies readonly (keyof TraceEvent)[];
 
@@ -230,13 +242,15 @@ export const TRACE_SHAPE: Readonly<Record<TraceKind, readonly (keyof TraceEvent)
 
   "saga-started": ["saga", "sagaKey"],
   "saga-redundant-start": ["saga", "sagaKey", "message"],
-  "saga-advanced": ["saga", "sagaKey", "message"],
-  "saga-timeout": ["saga", "sagaKey", "detail"],
+  "saga-advanced": ["saga", "sagaKey", "message", "step"],
+  "saga-timeout": ["saga", "sagaKey", "step"],
   "saga-completed": ["saga", "sagaKey"],
+  // `step` is not required on a terminal: a deadline ends an instance from outside any step, and
+  // inventing one to fill the field would make the completion rule undecidable.
   "saga-rejected": ["saga", "sagaKey", "detail"],
   "saga-abandoned": ["saga", "sagaKey", "detail"],
-  "saga-compensating": ["saga", "sagaKey", "message"],
-  "saga-irreversible": ["saga", "sagaKey", "detail"],
+  "saga-compensating": ["saga", "sagaKey", "message", "step"],
+  "saga-irreversible": ["saga", "sagaKey", "step"],
 
   "schedule-fired": ["schedule", "message"],
   "schedule-overrun": ["schedule", "message", "detail"],

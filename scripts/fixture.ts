@@ -91,10 +91,25 @@ const PARTS: Readonly<Record<TraceKind, Partial<TraceEvent>>> = {
     message: "acme.shop.PlaceOrder",
     detail: "an instance for `ORD-1` already exists, started 1s ago",
   },
-  "saga-advanced": { saga: SAGA, sagaKey: "ORD-1", message: "acme.shop.CardCharged", detail: "charge" },
-  "saga-timeout": { saga: SAGA, sagaKey: "ORD-1", detail: "`charge` waited 30s for a reply" },
+  "saga-advanced": {
+    saga: SAGA,
+    sagaKey: "ORD-1",
+    message: "acme.shop.CardCharged",
+    step: "charge",
+    detail: "charge",
+  },
+  "saga-timeout": {
+    saga: SAGA,
+    sagaKey: "ORD-1",
+    step: "charge",
+    detail: "`charge` waited 30s for a reply",
+  },
   "saga-completed": { saga: SAGA, sagaKey: "ORD-1" },
-  "saga-rejected": { saga: SAGA, sagaKey: "ORD-1", detail: "card declined" },
+  // A terminal a step caused: `step` names it, and by 7.4's rule `ship` therefore did **not**
+  // complete, so a consumer does not compensate it.
+  "saga-rejected": { saga: SAGA, sagaKey: "ORD-1", step: "ship", detail: "card declined" },
+  // And a terminal no step caused. `step` is absent, which is the case that makes the rule
+  // decidable rather than a guess — so the fixture carries both.
   "saga-abandoned": {
     saga: SAGA,
     sagaKey: "ORD-2",
@@ -104,11 +119,13 @@ const PARTS: Readonly<Record<TraceKind, Partial<TraceEvent>>> = {
     saga: SAGA,
     sagaKey: "ORD-2",
     message: "acme.shop.RefundCard",
+    step: "charge",
     detail: "undoing `charge`",
   },
   "saga-irreversible": {
     saga: SAGA,
     sagaKey: "ORD-2",
+    step: "notify",
     detail: "`notify` declared `undo none`, so unwinding skipped it",
   },
 

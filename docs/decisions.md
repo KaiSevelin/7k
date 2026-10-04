@@ -3078,6 +3078,67 @@ which completion order and declaration order disagree.
 
 ---
 
+## D102 — A saga's trace names its step as data, and the completion rule is stated
+
+Spider's saga view asked the published trace which steps an instance had completed. The trace could not
+answer, in two separate ways, and the second one was giving wrong answers rather than none.
+
+### The step name was prose
+
+`TRACE_SHAPE` required `detail` on `saga-timeout`, `saga-rejected`, `saga-abandoned` and
+`saga-irreversible`, and `detail` is documented as **"prose for a human. Never matched on."** The step
+name existed nowhere else. So the format required prose for the only place a fact lived, and the one
+consumer that needed the fact had to parse the prose — the exact coupling `detail` exists to prevent,
+and a field it was an error to have relied on.
+
+`step` is now a field: on `saga-advanced`, `saga-timeout`, `saga-compensating` and `saga-irreversible`
+it is required; on a terminal it is present when a step's action ended the instance. `detail` keeps its
+prose, which is what the sequence view puts in its margin.
+
+### `saga-advanced` never meant what it looks like
+
+> `saga-advanced` — an awaited message reached the instance and **its step's action ran**
+
+One of the actions is `reject`. So a step whose reply rejected the saga emits `saga-advanced` and did
+not complete, and a consumer reading the kind as success is wrong about the thing a saga exists to get
+right: **which steps completed is which steps get compensated.**
+
+The first `progressOf` read it as success. The example's own trace refuted it in one run — an instance
+that rejected inside `reserve` came out as a completed step with no compensation, while another with
+genuinely the same shape compensated correctly. Two readings of one trace disagreed, which is how a
+derived concept announces that it was never defined.
+
+`30-scenarios.md` 7.4 now states it:
+
+> A step completed if a `saga-advanced` named it and it is **not** the step named on the instance's
+> terminal event.
+
+A terminal names a step when a step's action ended the instance and names none when a deadline did, so
+the absence is load bearing: it is the difference between "this step failed" and "the clock ran out
+while it was waiting". That is why `step` is **not** in `TRACE_SHAPE` for the terminals — requiring it
+would force a runtime to invent one for a deadline and make the rule undecidable.
+
+### Why state it rather than add a kind
+
+A `saga-step-failed` kind, or an outcome field on `saga-advanced`, would both work. Neither was
+chosen: the kind set is closed and published (D93), every addition is a thing every consumer must learn,
+and the information was already present — it was the *rule* that was missing, not the data. One
+sentence in the specification cost nothing and made three implementations agree.
+
+### What makes it stick
+
+The invariant, asserted rather than described, in both repositories over real traces: **everything
+compensated must have completed.** It is checked per instance across the four runs of Spider's example —
+which between them cover completion, a rejecting reply, a timeout in the first step and a timeout in the
+second — and over every scenario the sandbox's own format test runs. Before the rule it failed; it is
+the assertion that would have caught this on the first day the trace existed.
+
+Seventh in the series: upcasts (D88), invariants (D89), projections (D90), the trace format itself
+(D93), label propagation (D95), contract semantics (D97), the mutation API (D98). Every one found by
+building the first real consumer of something the specification had claimed.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -3106,6 +3167,7 @@ One remains. All others are resolved — see the decisions named.
 | Producer atomicity inexpressible | D99 — `emits … best-effort`, atomic by default, with `lossy-publish` |
 | No way to say a message is a read | D100 — `@query`, which carries no deduplication key |
 | A parallel join named and unwritable | D101 — `parallel` blocks as stages, with two races made errors |
+| A saga's steps unreadable from its trace | D102 — `step` as data, and the completion rule stated |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |
