@@ -340,6 +340,12 @@ scenario CardDeclinedRefundsNothing {
 
 ## The tooling
 
+**In VS Code**, open [`7k.code-workspace`](7k.code-workspace) and press <kbd>F5</kbd>: Spider starts
+with the parcel locker example loaded and the browser opens itself. The file puts all three
+repositories in one window — they are expected to be siblings on disk — and its launch list also holds
+`7k check`, the sandbox against the example's scenarios, and vitest for whichever repository the open
+file belongs to.
+
 ```
 npm install
 npm test            # 647 tests

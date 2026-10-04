@@ -1,0 +1,179 @@
+{
+  // The three repositories as one window. Open this file and press F5: Spider starts with the parcel
+  // locker example loaded and the browser opens itself.
+  //
+  // It lives here because 7K is the hub — the other two depend on `@sevenk/core` and neither depends
+  // on the other. The folders are siblings of this one; if you have only cloned 7k, VS Code will show
+  // the other two as missing and everything scoped to this folder still works.
+  "folders": [
+    { "name": "7k", "path": "." },
+    { "name": "7k-sandbox", "path": "../7k-sandbox" },
+    { "name": "7k-spider", "path": "../7k-spider" }
+  ],
+
+  // Workspace-level launch configurations, which take precedence over each folder's own. That is the
+  // point of having them here: in a multi-root window F5 would otherwise depend on which folder the
+  // active file happens to be in.
+  //
+  // `node --import tsx` rather than `npx tsx`: the debugger attaches to the process it started, so
+  // breakpoints in src/*.ts work with no build step and no npx shim in between.
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        // First in the list, so this is what F5 does.
+        "name": "Spider: the example",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder:7k-spider}/src/cli.ts",
+        "args": ["serve", "examples", "--trace", "examples/handover.ndjson"],
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder:7k-spider}",
+        "console": "integratedTerminal",
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+        // Matches what the command prints: `7k Spider  http://127.0.0.1:7007/`
+        "serverReadyAction": {
+          "pattern": "7k Spider\\s+(https?://\\S+)",
+          "uriFormat": "%s",
+          "action": "openExternally"
+        }
+      },
+      {
+        // The same, with the page debuggable too. The bundle carries an inline source map, which is
+        // what makes breakpoints in src/web/*.ts work.
+        "name": "Spider: the example, debugging the page",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder:7k-spider}/src/cli.ts",
+        "args": ["serve", "examples", "--trace", "examples/handover.ndjson"],
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder:7k-spider}",
+        "console": "integratedTerminal",
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+        "serverReadyAction": {
+          "pattern": "7k Spider\\s+(https?://\\S+)",
+          "uriFormat": "%s",
+          "action": "debugWithEdge",
+          "webRoot": "${workspaceFolder:7k-spider}"
+        }
+      },
+      {
+        // How the graph looks before anything has run, which is most of what a model author sees.
+        "name": "Spider: the example, no trace",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder:7k-spider}/src/cli.ts",
+        "args": ["serve", "examples"],
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder:7k-spider}",
+        "console": "integratedTerminal",
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+        "serverReadyAction": {
+          "pattern": "7k Spider\\s+(https?://\\S+)",
+          "uriFormat": "%s",
+          "action": "openExternally"
+        }
+      },
+      {
+        "name": "7k check: the examples and the specification",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder:7k}/packages/cli/src/index.ts",
+        "args": ["check", "examples", "docs"],
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder:7k}",
+        "console": "integratedTerminal",
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      },
+      {
+        "name": "Sandbox: run the example's scenarios",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder:7k-sandbox}/src/cli.ts",
+        "args": ["run", "../7k-spider/examples/handover.scenario.7k"],
+        "runtimeArgs": ["--import", "tsx"],
+        "cwd": "${workspaceFolder:7k-sandbox}",
+        "console": "integratedTerminal",
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      },
+      {
+        // `${fileWorkspaceFolder}` is the folder holding the active file, so this runs whichever
+        // repository's test you are looking at with that repository's own vitest.
+        "name": "Vitest: this file",
+        "type": "node",
+        "request": "launch",
+        "program": "${fileWorkspaceFolder}/node_modules/vitest/vitest.mjs",
+        "args": ["run", "${relativeFile}"],
+        "cwd": "${fileWorkspaceFolder}",
+        "console": "integratedTerminal",
+        "skipFiles": ["<node_internals>/**"]
+      },
+      {
+        "name": "Vitest: every test in this repository",
+        "type": "node",
+        "request": "launch",
+        "program": "${fileWorkspaceFolder}/node_modules/vitest/vitest.mjs",
+        "args": ["run"],
+        "cwd": "${fileWorkspaceFolder}",
+        "console": "integratedTerminal",
+        "skipFiles": ["<node_internals>/**"]
+      }
+    ]
+  },
+
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        // The committed trace goes stale the moment the example model changes, which is why
+        // `test/example.test.ts` validates it: a stale trace fails rather than misleads. This is how
+        // you un-stale it. Not a `preLaunchTask` on F5, because the demo should start from a fresh
+        // clone without the sandbox checkout being present.
+        "label": "Regenerate the example trace",
+        "type": "npm",
+        "script": "trace",
+        "path": "../7k-spider",
+        "problemMatcher": [],
+        "presentation": { "panel": "dedicated" }
+      },
+      {
+        "label": "Typecheck everything",
+        "dependsOn": [
+          "7k: typecheck",
+          "7k-sandbox: typecheck",
+          "7k-spider: typecheck"
+        ],
+        "problemMatcher": []
+      },
+      { "label": "7k: typecheck", "type": "npm", "script": "typecheck", "path": ".", "problemMatcher": ["$tsc"] },
+      {
+        "label": "7k-sandbox: typecheck",
+        "type": "npm",
+        "script": "typecheck",
+        "path": "../7k-sandbox",
+        "problemMatcher": ["$tsc"]
+      },
+      {
+        "label": "7k-spider: typecheck",
+        "type": "npm",
+        "script": "typecheck",
+        "path": "../7k-spider",
+        "problemMatcher": ["$tsc"]
+      }
+    ]
+  },
+
+  "settings": {
+    // Byte-exact round-tripping is a hard requirement (`docs/spec/20-ir.md` 7.2), so an edit must not
+    // arrive as CRLF and get normalised on the way into git.
+    "files.eol": "\n",
+    "files.insertFinalNewline": true,
+    "files.trimTrailingWhitespace": true,
+    "search.exclude": {
+      "**/dist": true,
+      "**/node_modules": true,
+      "**/examples/schema": true
+    },
+    "files.associations": { "*.7k": "plaintext" }
+  }
+}
