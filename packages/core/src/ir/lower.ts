@@ -348,7 +348,7 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
   const labels = annotations.filter(
     (a) =>
       ![
-        "command", "event", "internal", "external", "since", "deprecated", "role", "derive",
+        "command", "event", "query", "internal", "external", "since", "deprecated", "role", "derive",
       ].includes(a),
   );
   const base = {
@@ -410,7 +410,9 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
         ? "command"
         : annotations.includes("event")
           ? "event"
-          : undefined;
+          : annotations.includes("query")
+            ? "query"
+            : undefined;
       const visibility: Visibility = annotations.includes("internal")
         ? { kind: "internal", scope: annArgs.get("internal") ?? ctx.pkg }
         : { kind: "public" };

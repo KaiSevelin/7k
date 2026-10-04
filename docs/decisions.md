@@ -2931,6 +2931,65 @@ before its work commits. That is the mirror image, it is equally real, and `once
 
 ---
 
+## D100 — `@query` is a third intent, and it carries no deduplication key
+
+There were two intents, so a read had to be modelled as a command. The diagnostics then gave actively
+wrong advice — `unexplained-emit` fired on every query, because nothing instructs a question — but that
+was the small half of the problem.
+
+### The half that mattered
+
+A deduplication key **defaults to the message's `@role(businessKey)` field** (D54), and a query
+naturally has one: it is the thing being asked about. `WhereIsParcel { parcelRef @role(businessKey) }` is
+the obvious shape.
+
+So a read modelled as a command was **silently collapsed**. A recipient refreshing a page asked the same
+question twice, the second ask was absorbed as a duplicate, the caller was answered with nothing, and the
+trace said `deduplicated` — which looks exactly like the system working correctly. There was no
+diagnostic for it and no way to write the model that avoided it, short of `once per none` on every read
+and knowing to.
+
+**Answering a question twice is correct.** There is nothing for a repeat to be a duplicate *of*, so:
+
+- the default key does not apply to a query;
+- `missing-dedupe-key` is not reported for one, where previously a keyless query on an `at-least-once`
+  pipe was an **error** — the checker demanding a key whose only effect would be to suppress an answer;
+- an explicit `once per <path>` on a query is an error (`query-deduplicated`), not a tuning choice;
+- `once per none` is accepted, because saying it out loud is reasonable even where it is implied;
+- the sandbox returns no key for one, which is where the behaviour actually lives.
+
+A query is free to retry for the same reason: it changes nothing, so a redelivery is not a second effect.
+
+### The diagnostics it makes possible
+
+| | |
+|---|---|
+| `query-on-topic` | warning. Every subscriber answers, and the asker cannot tell which answer it received — the sibling of `command-on-topic` |
+| `query-without-answer` | error. `replies none` on a query is a contradiction rather than a configuration: the answer is the whole point |
+| `query-deduplicated` | error. As above |
+
+`unexplained-emit` needed no change at all. It only ever fired on `@command`, so giving reads their own
+intent fixed it by construction — which is the argument for adding the intent rather than patching the
+analysis.
+
+### What a query is not
+
+**It is not a synchronous call.** 7K describes messages; whether a hop is a blocking call, a
+request-reply pair over a broker or an HTTP round trip is an implementation's business
+(`00-overview.md`). The intent says what the message is *for*, which is the part that can be checked.
+
+**It is not a command with a reply.** A command with a reply changes something and then reports; a query
+changes nothing. That difference is what licenses free retries and no key, and it is not derivable from
+the presence of a `replies` clause.
+
+### What it leaves open
+
+Nothing says a query's handler **does not** mutate. That is an internal, unenforceable by the test in
+`03-topology.md` 2.0, and a declaration that rots is worse than none — so `@query` is a statement of
+intent that codegen honours by not generating a deduplication key, and not a proof of purity.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -2957,6 +3016,7 @@ One remains. All others are resolved — see the decisions named.
 | Predicate and payload semantics in a runtime | D97 — `core/src/contract/`, with the sandbox's 162 tests as the gate |
 | The mutation API specified and unimplemented | D98 — `core/src/mutate/`, with section 7.2's properties true by construction |
 | Producer atomicity inexpressible | D99 — `emits … best-effort`, atomic by default, with `lossy-publish` |
+| No way to say a message is a read | D100 — `@query`, which carries no deduplication key |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |

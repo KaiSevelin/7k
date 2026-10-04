@@ -150,7 +150,14 @@ export type Visibility =
 export interface MessageIr extends DeclBase {
   readonly kind: "message";
   readonly version?: string;
-  readonly intent?: "command" | "event";
+  /**
+   * What the message is for (`02-contract.md` 5.5).
+   *
+   * `command` instructs, `event` states a fact, `query` asks a question. A query is not a command with a
+   * reply: it changes nothing, so it may be retried freely and — the consequence that matters —
+   * **carries no deduplication key**, because answering a question twice is correct (D100).
+   */
+  readonly intent?: "command" | "event" | "query";
   readonly visibility: Visibility;
   readonly fields: readonly FieldIr[];
   readonly includes: readonly Ref[];

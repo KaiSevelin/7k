@@ -508,6 +508,10 @@ author makes deliberately, and an implementation generates no deduplication stor
 on every send attempt, `@role(businessKey)` on that field is decorative — each retry looks like a new
 message. The key has to derive from business identity, and nothing in the model can tell the difference.
 
+A `@query` is the exception to all of this: it carries no key at all. It changes nothing, so answering it
+twice is correct and there is nothing for a repeat to be a duplicate of — the default does not apply, and
+an explicit `once per <path>` on one is an error (`02-contract.md` 5.5).
+
 ### 2.9 Publication
 
 > **A publication is atomic with the work that caused it, unless it says otherwise.**

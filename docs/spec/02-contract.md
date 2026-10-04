@@ -365,27 +365,50 @@ version, not by translation:
 
 Adding a downcast form would let a model claim a breaking change is survivable. It is not.
 
-### 5.5 Intent: command or event
+### 5.5 Intent: command, event or query
 
-A message declares its intent, because the two behave differently and the difference is checkable:
+A message declares its intent, because the three behave differently and the differences are checkable:
 
 ```7k
 message ReserveSeats  v1.0 @command { ... }
 message SeatsReserved v1.0 @event   { ... }
+message SeatAvailability v1.0 @query { ... }
 ```
 
 | Intent | Meaning |
 |---|---|
 | `@command` | imperative, expects exactly one handler to act |
 | `@event` | a statement of fact; any number of subscribers may observe it |
-| *(neither)* | unspecified — `incomplete` |
+| `@query` | a question, expecting exactly one answer. It changes nothing |
+| *(none)* | unspecified — `incomplete` |
 
 Naming convention hints at this (`ReserveSeats` versus `SeatsReserved`) but conventions are not
-checkable. Declaring it gives two diagnostics for free:
+checkable. Declaring it gives four diagnostics for free:
 
 - `command-on-topic` — a command fanned out to every subscriber is almost always a design error
 - `event-on-queue` — an event on a point-to-point pipe means exactly one subscriber ever sees it, which
   is almost never what was intended
+- `query-on-topic` — every subscriber answers, and the asker cannot tell which answer it received
+- `query-without-answer` — a subscription on a query declaring `replies none`, which is a contradiction
+  rather than a configuration
+
+**A query carries no deduplication key**, and that is the consequence that matters rather than any of the
+diagnostics. A key defaults to the message's `@role(businessKey)` field, and a query naturally has one —
+it is the thing being asked about. So a read modelled as a command is **silently collapsed**: the second
+caller asking the same question is answered with nothing, and the trace says `deduplicated`, which looks
+like the system working.
+
+Answering a question twice is correct. There is nothing for a repeat to be a duplicate *of*, so the
+default does not apply, `missing-dedupe-key` is not reported for one, and an explicit `once per <path>`
+on a query is an error (`query-deduplicated`) rather than a tuning choice.
+
+A query is also free to retry, for the same reason — it changes nothing, so a redelivery is not a second
+effect.
+
+**What a query is not** is a construct for synchronous calls. 7K describes messages; whether a given
+hop is implemented as a blocking call, a request-reply pair over a broker or an HTTP round trip is an
+implementation's business (`00-overview.md`). The intent says what the message is *for*, which is what
+can be checked.
 
 ### 5.6 Deployment order safety
 

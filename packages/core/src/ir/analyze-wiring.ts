@@ -28,6 +28,7 @@ const servicesOf = (m: LinkedModel): ServiceIr[] =>
 
 export function analyzeWiring(model: LinkedModel): Diagnostic[] {
   return [
+    ...queryAnswers(model),
     ...intentAgainstPipe(model),
     ...orderingDefeated(model),
     ...unclaimedRoles(model),
@@ -60,6 +61,52 @@ function carriage(model: LinkedModel): Carriage[] {
 // ---- intent against pipe kind -----------------------------------------------
 
 /**
+ * A query whose answer is thrown away, in either of the two ways a declaration can do it.
+ *
+ * A query exists for its reply. `replies none` on one is a contradiction rather than a configuration,
+ * and `once per <path>` on one suppresses an answer somebody is waiting for — the second caller asking
+ * the same question gets silence, and nothing in the system records why.
+ */
+function queryAnswers(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  for (const service of servicesOf(model)) {
+    for (const react of service.reacts) {
+      const asked = model.declFor(react.message);
+      if (asked?.kind !== "message" || asked.intent !== "query") continue;
+
+      // `replies` absent is `incomplete` and reported elsewhere; `replies none` is a claim, and on a
+      // query it is a false one.
+      if (react.replies?.length === 1 && react.replies[0] === "none") {
+        out.push({
+          code: "query-without-answer",
+          severity: "error",
+          message:
+            `\`${service.id.name}\` consumes the \`@query\` \`${react.message.text}\` and declares ` +
+            "`replies none` — a query exists for its answer, so there is nothing left for this " +
+            "subscription to be for",
+          span: react.span,
+        });
+      }
+
+      if (react.dedupe !== undefined && "by" in react.dedupe) {
+        out.push({
+          code: "query-deduplicated",
+          severity: "error",
+          message:
+            `\`${service.id.name}\` consumes the \`@query\` \`${react.message.text}\` with ` +
+            `\`once per ${react.dedupe.by}\` — a second caller asking the same question would be ` +
+            "answered with silence. Answering twice is correct, so a query carries no key",
+          span: react.span,
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
  * `@command` and `@event` exist so that these two come for free
  * (`02-contract.md` section 5.5). Naming hints at the distinction — `ReserveSeats` versus
  * `SeatsReserved` — but a convention is not checkable and a declaration is.
@@ -75,6 +122,18 @@ function intentAgainstPipe(model: LinkedModel): Diagnostic[] {
         message:
           `\`${message.id.name}\` is a \`@command\` on \`${qualify(pipe.id)}\`, a ${pipe.pipeKind}, so ` +
           "every subscriber is told to do it — a command expects exactly one handler to act",
+        span,
+      });
+    }
+
+    if (message.intent === "query" && pipe.pipeKind !== "queue") {
+      out.push({
+        code: "query-on-topic",
+        severity: "warning",
+        message:
+          `\`${message.id.name}\` is a \`@query\` on \`${qualify(pipe.id)}\`, a ${pipe.pipeKind}, so ` +
+          "every subscriber answers it — a question expects exactly one answer, and the asker cannot " +
+          "tell which of several it received",
         span,
       });
     }

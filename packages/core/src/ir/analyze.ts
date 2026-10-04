@@ -383,6 +383,13 @@ function dedupeKeys(model: LinkedModel): Diagnostic[] {
     if (s.external) continue;
     for (const r of s.reacts) {
       if (r.dedupe !== undefined) continue; // `once per <path>` or `once per none`
+
+      // A query needs no key. It changes nothing, so answering it twice is correct and there is nothing
+      // for a duplicate to be a duplicate *of* (D100). Asking for one would be asking the author to
+      // suppress an answer somebody is waiting for.
+      const asked = model.declFor(r.message);
+      if (asked?.kind === "message" && asked.intent === "query") continue;
+
       const pipe = model.declFor(r.pipe);
       if (pipe === undefined || pipe.kind !== "pipe") continue;
       if (pipe.delivery === "at-most-once") continue;
