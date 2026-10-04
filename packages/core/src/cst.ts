@@ -51,6 +51,7 @@ export type NodeKind =
   | "StartStmt"
   | "StateDecl"
   | "StepDecl"
+  | "ParallelBlock"
   | "OnStmt"
   | "UndoStmt"
   | "Trigger"

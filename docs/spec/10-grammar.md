@@ -307,12 +307,13 @@ Backoff is exponential by default; `linear` is the only override, so the common 
 
 ```ebnf
 sagaDecl     = anns "saga" ident version body( sagaItem ) ;
-sagaItem     = startStmt | stateDecl | stepDecl | onTerminal ;
+sagaItem     = startStmt | stateDecl | stepDecl | parallelBlock | onTerminal ;
 
 startStmt    = "start" "on" qname [ "keyed" "by" path ] [ body( assign ) ] ;
 stateDecl    = "state" body( field ) ;
 
 stepDecl     = anns "step" ident body( stepItem ) ;
+parallelBlock = "parallel" body( stepDecl ) ;   (* steps only, and not nested *)
 stepItem     = sendStmt
              | "on" trigger [ action ]
              | "undo" ( "with" qname [ body( assign ) ] | "none" ) ;

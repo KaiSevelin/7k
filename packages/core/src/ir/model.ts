@@ -367,6 +367,15 @@ export interface SendIr {
 
 export interface StepIr {
   readonly name: string;
+  /**
+   * Which stage this step belongs to (`04-process.md` 1.3).
+   *
+   * Steps sharing a stage were written in one `parallel` block and run concurrently; a bare step is a
+   * stage of its own. A saga advances when every step in its current stage has completed, which makes a
+   * wholly sequential saga the case where every stage holds one step rather than a separate kind of
+   * saga.
+   */
+  readonly stage: number;
   readonly send?: SendIr;
   readonly awaits: readonly AwaitIr[];
   /** Absent means the step is bounded only by the saga's deadline (`unbounded-step`). */

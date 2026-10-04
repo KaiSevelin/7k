@@ -190,6 +190,54 @@ by what actually bounds the wait: a step with no `timeout` under a saga that has
 `unbounded-step`, a warning, because the wait does end — just by abandoning the whole process rather than
 failing this step. A step with neither is `saga-liveness`, an error, because nothing will ever end it.
 
+**Steps may run at once.** A `parallel` block's branches are all sent together, and the saga advances
+when every one of them has completed:
+
+```7k
+parallel {
+  step hold {
+    send HoldStock
+    on StockHeld { holdRef = message.holdRef }
+    on timeout 5s reject "the warehouse did not answer"
+    undo with ReleaseStock
+  }
+  step authorise {
+    send AuthoriseCard
+    on CardAuthorised { authRef = message.authRef }
+    on CardDeclined reject "card declined"
+    undo with VoidAuthorisation
+  }
+}
+step ship { ... }
+```
+
+The unit is a **stage**: branches written in one `parallel` block share a stage, a bare `step` is a stage
+of its own, and a saga leaves a stage when its last branch completes. A wholly sequential saga is
+therefore not a different kind of saga — it is one whose every stage holds a single step.
+
+Everything a step already says still means what it said. Each branch sends its own message, declares its
+own `on` clauses, carries its own `timeout` — which starts when the **stage** is entered, not when a
+sibling finished — and declares its own `undo`.
+
+| | |
+|---|---|
+| a branch `reject`s or `abandon`s | the saga terminates at once and its siblings stop waiting; there is nothing to be gained by waiting out the rest of a process that has already failed |
+| two branches assign the same state field | `parallel-state-race`, an error |
+| two branches await the same message | `parallel-await-collision`, an error |
+| a `parallel` inside a `parallel` | a parse error |
+
+The two races are errors rather than warnings because neither has a defensible reading. Which branch
+wins a shared field depends on which reply happens to arrive first, and a process whose own state is
+decided that way cannot describe itself. One message cannot advance two branches, so whichever is
+reached first consumes it and the other waits out its timeout. Both are invisible in a sequence — two
+steps one after the other writing a field is an ordinary overwrite, and waiting twice for the same
+message is an ordinary second wait — which is the argument for checking them the moment the language can
+express the thing that makes them wrong.
+
+**Nesting is refused** rather than defined. A block of branches is as much structure as a process
+*description* needs; nesting would make the join condition and the unwinding order both harder to state
+than any saga is worth, and a process that genuinely needs a tree of them is two sagas (section 1.6).
+
 ### 1.4 Undo
 
 ```7k
@@ -214,6 +262,12 @@ reverse: if `charge` is rejected because the card declined, `RefundCard` is not 
 single most important property to test, and it is why the scenario pair in
 `../../examples/shop.scenario.7k` asserts both directions.
 
+Reverse **completion** order, which for a sequence is reverse declaration order and for a stage is
+whatever actually happened. Two branches that ran at once had no order to reverse, so a runtime unwinds
+them in the order they finished in; that is deterministic for a given run and a given seed, and it is all
+that can honestly be promised about undoing two things that happened at the same time. Nothing in a
+compensation should depend on it — if one inverse must precede another, the two steps were a sequence.
+
 A step that cannot be reversed says so, using the same `none` idiom as `ordering none`, `dlq none` and
 `replies none`:
 
@@ -226,9 +280,13 @@ step notify {
 ```
 
 A step with neither `undo with` nor `undo none` is reported as `uncompensated` — a warning, because silence
-there is more often an oversight than a decision. The **last** step is exempt: compensation runs only for a
-step that completed, and nothing after the last step exists to trigger its unwinding, so there is genuinely
-nothing to declare.
+there is more often an oversight than a decision. A step **alone in the last stage** is exempt:
+compensation runs only for a step that completed, and nothing after it exists to trigger its unwinding, so
+there is genuinely nothing to declare.
+
+Alone in the last stage, and not merely written last. A branch of a final `parallel` block has a sibling
+that can reject *after* it completed, and that rejection unwinds it — so the exemption a sequence's final
+step earns, a final block's branches do not.
 
 **Reversibility is per step, not per command.** The alternative would be to declare an inverse on the command
 itself — `ChargeCard` is reversed by `RefundCard`, always — which would avoid repeating it. Per-step wins for
@@ -327,7 +385,7 @@ What the language does is make the constraints visible. Core reports which const
 | Construct | Why it needs an owner |
 |---|---|
 | `on deadline` | somebody must hold the timer for the whole saga |
-| a parallel join | somebody must wait for both branches |
+| a `parallel` block (section 1.3) | somebody must wait for every branch |
 | `undo` across several steps | somebody must decide how far to unwind |
 | querying instance state | somebody must materialise it |
 
@@ -467,7 +525,8 @@ Everything the Process layer adds.
 | `start on` | the message that creates an instance (1.1) |
 | `keyed by` | the field identifying one instance (1.1) |
 | `state` | declared instance data, assigned only from received messages (1.2) |
-| `step` | one stage: send one message, wait for outcomes (1.3) |
+| `step` | one step of a process: send one message, wait for outcomes (1.3) |
+| `parallel` | steps that run at once, joined when the last of them completes (1.3) |
 | `send` | dispatch a message, routed by the hosting service's `emits`; an optional block says what it carries |
 | `on` | a trigger and its action — the layer's only idiom |
 | `timeout` | how long a step waits (1.3) |

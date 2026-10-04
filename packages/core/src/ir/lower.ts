@@ -773,7 +773,28 @@ function lowerSaga(ctx: Ctx, n: CstNode, base: DeclBaseFields, id: NodeIdOf<"sag
   const stateNode = body === undefined ? undefined : childNodes(body, "StateDecl")[0];
   const state = fieldsOf(ctx, stateNode === undefined ? undefined : childNodes(stateNode, "Body")[0]);
 
-  const steps: StepIr[] = (body === undefined ? [] : childNodes(body, "StepDecl")).map((s) => {
+  // Stages, in source order: a bare `step` is its own, and a `parallel` block's steps share one. Walked
+  // over the body's children rather than over `StepDecl`s alone, because the grouping is the one thing a
+  // flat list of steps cannot carry.
+  const stageOf = new Map<CstNode, number>();
+  let stage = 0;
+  for (const item of body === undefined ? [] : childNodes(body)) {
+    if (item.kind === "StepDecl") {
+      stageOf.set(item, stage);
+      stage += 1;
+    } else if (item.kind === "ParallelBlock") {
+      const inner = childNodes(item, "Body")[0];
+      const branches = inner === undefined ? [] : childNodes(inner, "StepDecl");
+      for (const branch of branches) stageOf.set(branch, stage);
+      // Only a block that contributed a step consumes a stage number. Stages are therefore dense,
+      // which is what lets a runtime read an empty stage as "past the end" and complete there — an
+      // empty `parallel { }` would otherwise be a hole in the middle of a saga that silently ends it.
+      if (branches.length > 0) stage += 1;
+    }
+  }
+
+  const stepNodes = [...stageOf.keys()];
+  const steps: StepIr[] = stepNodes.map((s) => {
     const sb = childNodes(s, "Body")[0];
     const sends = sb === undefined ? [] : childNodes(sb, "Clause").filter((c) => kwOf(c) === "send");
     const ons = sb === undefined ? [] : childNodes(sb, "OnStmt");
@@ -810,6 +831,7 @@ function lowerSaga(ctx: Ctx, n: CstNode, base: DeclBaseFields, id: NodeIdOf<"sag
     const send = sendOf(ctx, sends[0]);
     return {
       name: declName(s)?.name ?? "",
+      stage: stageOf.get(s) ?? 0,
       ...(send === undefined ? {} : { send }),
       awaits,
       ...(timeout === undefined ? {} : { timeout }),

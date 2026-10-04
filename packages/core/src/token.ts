@@ -77,7 +77,7 @@ export const KEYWORD_ROLES: ReadonlyMap<string, KeywordRole> = new Map(
       ["declaration", [
         "package", "import", "label", "value", "enum", "record", "envelope", "message",
         "upcast", "pipe", "service", "saga", "schedule",
-        "scenarios", "scenario", "soak", "mockset", "mock", "step", "state",
+        "scenarios", "scenario", "soak", "mockset", "mock", "step", "parallel", "state",
       ]],
       ["clause", [
         "envelopes", "tier", "include", "invariant",

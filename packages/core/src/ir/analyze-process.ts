@@ -49,6 +49,7 @@ export function analyzeProcess(model: LinkedModel): Diagnostic[] {
   if (sagas.length === 0) return [];
 
   return [
+    ...parallelRaces(model, sagas),
     ...unhandledOutcomes(model, sagas),
     ...stateUse(model, sagas),
     ...liveness(model, sagas),
@@ -57,6 +58,84 @@ export function analyzeProcess(model: LinkedModel): Diagnostic[] {
     ...composition(model, sagas),
   ];
 }
+
+/**
+ * Two steps in one `parallel` block writing the same state field, or awaiting the same message.
+ *
+ * Both are races, and both are invisible in a sequential saga — the same two steps one after the other
+ * are a perfectly ordinary overwrite and a perfectly ordinary second wait. Running them at once is what
+ * makes the outcome depend on which reply happens to arrive first, and a process whose state depends on
+ * that is not one anybody can reason about.
+ */
+function parallelRaces(model: LinkedModel, sagas: readonly SagaIr[]): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  for (const saga of sagas) {
+    const stages = new Map<number, StepIr[]>();
+    for (const step of saga.steps) {
+      stages.set(step.stage, [...(stages.get(step.stage) ?? []), step]);
+    }
+
+    for (const branches of stages.values()) {
+      if (branches.length < 2) continue;
+
+      // ---- the same state field, written by two branches ----------------------
+      const writers = new Map<string, string[]>();
+      for (const step of branches) {
+        for (const awaited of step.awaits) {
+          if (awaited.action.a !== "continue") continue;
+          for (const assign of awaited.action.assigns) {
+            // The whole path, so `a.b` and `a.c` are not reported as the same race — they are two
+            // fields of one record and two branches may legitimately fill one each.
+            const field = assign.target.join(".");
+            writers.set(field, [...(writers.get(field) ?? []), step.name]);
+          }
+        }
+      }
+      for (const [field, by] of writers) {
+        if (by.length < 2) continue;
+        const step = branches.find((b) => b.name === by[0])!;
+        out.push({
+          code: "parallel-state-race",
+          severity: "error",
+          message:
+            `steps \`${by.join("` and `")}\` of \`${saga.id.name}\` run in parallel and both assign ` +
+            `\`${field}\` — which of them wins depends on which reply arrives first, so the saga's own ` +
+            "state is not something it can describe",
+          span: step.span,
+        });
+      }
+
+      // ---- the same message, awaited by two branches --------------------------
+      const waiters = new Map<string, string[]>();
+      for (const step of branches) {
+        for (const awaited of step.awaits) {
+          const id = model.resolve(awaited.message);
+          if (id === undefined) continue;
+          const key = symbolKey(id.pkg, id.name);
+          waiters.set(key, [...(waiters.get(key) ?? []), step.name]);
+        }
+      }
+      for (const [key, by] of waiters) {
+        if (by.length < 2) continue;
+        const step = branches.find((b) => b.name === by[0])!;
+        const name = model.symbols.get(key)?.id.name ?? key;
+        out.push({
+          code: "parallel-await-collision",
+          severity: "error",
+          message:
+            `steps \`${by.join("` and `")}\` of \`${saga.id.name}\` run in parallel and both await ` +
+            `\`${name}\` — one message cannot advance two branches, so whichever is reached first ` +
+            "consumes it and the other waits until its timeout",
+          span: step.span,
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
 
 // ---- the outcome space of a sent message ------------------------------------
 
@@ -307,17 +386,24 @@ function liveness(model: LinkedModel, sagas: readonly SagaIr[]): Diagnostic[] {
  * A step with neither `undo with` nor `undo none`.
  *
  * A warning rather than an error because silence there is usually an oversight rather than
- * a decision (`04-process.md` 1.4) — but the **last** step is exempt. Compensation runs
- * only for a step that completed, and nothing after the last step exists to trigger its
+ * a decision (`04-process.md` 1.4) — but a step **alone in the last stage** is exempt.
+ * Compensation runs only for a step that completed, and nothing after it exists to trigger its
  * unwinding, so there is genuinely nothing to declare.
+ *
+ * Alone in the last stage, and not merely last: a branch of a final `parallel` block has a sibling
+ * that can still reject after it completed, and that rejection unwinds it. So the exemption that a
+ * sequence's final step earns, a final block's branches do not.
  */
 function compensation(model: LinkedModel, sagas: readonly SagaIr[]): Diagnostic[] {
   const out: Diagnostic[] = [];
 
   for (const saga of sagas) {
-    for (const [i, step] of saga.steps.entries()) {
+    const lastStage = Math.max(...saga.steps.map((s) => s.stage));
+    const aloneAtTheEnd = saga.steps.filter((s) => s.stage === lastStage).length === 1;
+
+    for (const step of saga.steps) {
       if (step.undo !== undefined) continue;
-      if (i === saga.steps.length - 1) continue;
+      if (step.stage === lastStage && aloneAtTheEnd) continue;
 
       out.push({
         code: "uncompensated",

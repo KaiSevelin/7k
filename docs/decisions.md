@@ -2990,6 +2990,94 @@ intent that codegen honours by not generating a deduplication key, and not a pro
 
 ---
 
+## D101 — Parallel steps are stages, and nesting is refused
+
+`04-process.md` 1.7 listed "a parallel join" among the constructs that force a coordinator. So the
+specification named a construct, warned about what it costs, and gave no way to write one. Scatter-gather
+— hold the stock *and* authorise the card, then ship — had to be serialised, which makes a process slower
+for a reason that lives nowhere in the model, or split into two sagas, which moves the join into code.
+
+### Stages, not a parallel construct
+
+```7k
+parallel {
+  step hold      { send Hold  on Held   { holdRef = message.holdRef } ... undo with Release }
+  step authorise { send Auth  on Authed { authRef = message.authRef } ... undo with Void }
+}
+step ship { ... }
+```
+
+The lowered form adds **one number to a step**: `StepIr.stage`. Branches of one block share a stage, a
+bare step is a stage of its own, and a saga leaves a stage when its last branch completes.
+
+That framing is the whole decision. The alternative — a `ParallelIr` node alongside `StepIr`, a step list
+that is a tree — would have given the runtime two shapes to walk, every analysis two cases, and Spider two
+things to draw. With stages, **a sequential saga is the case where every stage holds one step**. The
+runtime change was a cursor becoming a cursor plus a `Set`, and all 170 of the sandbox's existing tests
+passed without being touched, which is the evidence that it is a generalisation and not a second path.
+
+Stages are **dense**: an empty `parallel { }` consumes no number. A hole would otherwise be a stage with
+no steps in it, and a runtime reading an empty stage as "past the end" would silently complete a saga
+before the steps that follow.
+
+### Two races that only exist now
+
+| | |
+|---|---|
+| `parallel-state-race` | error. Two branches assigning the same state field |
+| `parallel-await-collision` | error. Two branches awaiting the same message |
+
+Errors, not warnings, because neither has a defensible reading. Which branch wins a shared field depends
+on which reply happens to arrive first; one message cannot advance two branches, so whichever is reached
+first consumes it and the other waits out its timeout.
+
+What makes them worth checking is that **both are invisible in a sequence**. Two steps one after the other
+writing a field is an ordinary overwrite, and waiting twice for the same message is an ordinary second
+wait. Adding the construct is what turns them into bugs, so the checks arrived with it rather than after
+the first production incident. The field comparison is on the joined path, so `refs.hold` and `refs.auth`
+are not reported as one race.
+
+### Reverse completion order
+
+`undo` already ran "in reverse order", which for a sequence means reverse declaration order. Two branches
+that ran at once had no order to reverse, so a runtime unwinds them in **the order they actually
+completed** — deterministic for a given seed, and all that can honestly be promised about undoing two
+things that happened at the same time. `Instance.completed` already recorded exactly that, so the rule
+needed no new state; what it needed was saying out loud that nothing in a compensation may depend on it.
+If one inverse must precede another, the two steps were a sequence.
+
+### The exemption that stopped being true
+
+`uncompensated` exempted **the last step**, on the grounds that nothing after it exists to trigger its
+unwinding. A final `parallel` block breaks that: a branch has a sibling that can reject *after* it
+completed, and that rejection unwinds it. The check was `i === steps.length - 1`, which quietly exempted
+whichever branch happened to be written last.
+
+It is now *alone in the last stage*. A sequence's final step earns the exemption; a final block's branches
+do not. This was not something the construct required — it is a pre-existing check whose **justification**
+the construct invalidated, and it would have shipped as a missing warning on exactly the models most
+likely to need it.
+
+### Nesting is refused, not defined
+
+The parser accepts only `step` inside a `parallel`. A block of branches is as much structure as a process
+*description* needs; nesting makes both the join condition and the unwinding order harder to state than
+any saga is worth, and a process that genuinely needs a tree of them is two sagas (`04-process.md` 1.6).
+Refusing it is also reversible — a later version can define nesting, where a version that shipped it
+underspecified could not take it back.
+
+### What the sandbox proves
+
+A checker can say two branches do not race. Only a run can show they are concurrent, so
+`test/parallel.test.ts` asserts that both commands are published at the **same virtual instant** (a
+sequence would put the second 200ms later), that state assigned in both branches survives the join and
+reaches the next stage, that a rejection in one branch cancels its siblings' timers rather than letting
+them fire into a terminated instance, and that compensation runs in completion order — the second-declared
+branch is deliberately the faster one in every one of those tests, because that is the only arrangement in
+which completion order and declaration order disagree.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -3017,6 +3105,7 @@ One remains. All others are resolved — see the decisions named.
 | The mutation API specified and unimplemented | D98 — `core/src/mutate/`, with section 7.2's properties true by construction |
 | Producer atomicity inexpressible | D99 — `emits … best-effort`, atomic by default, with `lossy-publish` |
 | No way to say a message is a read | D100 — `@query`, which carries no deduplication key |
+| A parallel join named and unwritable | D101 — `parallel` blocks as stages, with two races made errors |
 | A payload for `send` | D81 — a block reading `state`, `occurrence` and `terminal` |
 | Token lifetime in long-running sagas | D61 — service identity, subject as data |
 | Recurring schedule semantics after an outage | D62 — `onMissed` required, no default |

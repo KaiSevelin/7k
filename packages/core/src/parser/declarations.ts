@@ -391,6 +391,15 @@ const SAGA_ITEMS = (c: Cursor): CstNode | undefined => {
     parts.push(body(c, STEP_ITEMS, "`send`, `on` or `undo`"));
     return node("StepDecl", parts);
   }
+  if (c.atKeyword("parallel")) {
+    // Steps only, and no nested `parallel`: a block of branches is as much structure as a process needs,
+    // and nesting would make both the unwinding order and the join condition harder to state than any
+    // saga is worth.
+    return node("ParallelBlock", [
+      c.advance(),
+      body(c, (x) => (x.atKeyword("step") ? SAGA_ITEMS(x) : undefined), "`step`"),
+    ]);
+  }
   if (c.atKeyword("on")) return onStmt(c);
   return undefined;
 };
