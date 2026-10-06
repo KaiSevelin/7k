@@ -17,6 +17,8 @@ import {
   addService,
   apply,
   applyAll,
+  addSaga,
+  addStep,
   buildWorkspace,
   connectEmit,
   connectReact,
@@ -444,5 +446,201 @@ describe("property 2 holds for every operation", () => {
       expect(isPossible(mutation), mutation.describe).toBe(true);
       check(FILES, mutation);
     }
+  });
+});
+
+/**
+ * Adding a saga, and adding a step to one.
+ *
+ * The step is the interesting operation, because it reads an answer the model has already given: the
+ * outcomes of a step are the `replies` of whatever handles the message it sends (2.1). A step written
+ * by hand is how `unhandled-outcome` happens; one written from the declaration cannot, and that is the
+ * property worth asserting — not the text, but that the text checks out.
+ *
+ * The fixture is a model with no errors in it, because `editable` insists on one and because an
+ * operation tested against a broken model proves nothing about a working one. Getting there taught the
+ * feature something: a saga with no steps is an error (`saga-liveness`), and so is a step with no
+ * timeout in a saga with no deadline — which is why `addStep` offers a timeout at all.
+ */
+const SAGA_MODEL = `package acme.sales
+
+message PlaceOrder v1.0 @command { orderId: uuid @role(businessKey) }
+message Reserve    v1.0 @command { orderId: uuid @role(businessKey) }
+message Reserved   v1.0 @event   { orderId: uuid @role(businessKey) }
+message Refused    v1.0 @event   { orderId: uuid @role(businessKey) }
+message Done       v1.0 @event   { orderId: uuid @role(businessKey) }
+
+pipe inbound  : queue { retention 7d }
+pipe commands : queue { retention 7d }
+pipe events   : topic { retention 7d }
+
+service Desk {
+  reacts PlaceOrder from inbound { replies none }
+  emits Reserve to commands
+  emits Done    to events
+}
+
+service Store {
+  reacts Reserve from commands { replies Reserved | Refused }
+  emits Reserved to events
+  emits Refused  to events
+}
+
+saga Checkout v1.0 {
+  start on PlaceOrder
+
+  step hold {
+    send Reserve
+
+    on Reserved
+    on Refused reject "no stock"
+  }
+
+  on deadline 24h abandon
+
+  on complete send Done
+}
+`;
+
+describe("sagas", () => {
+  const where = (source = SAGA_MODEL): Editable => editable({ "a.7k": source });
+  const checked = (source: string): readonly string[] => {
+    const ws = buildWorkspace([{ path: "a.7k", source }]);
+    return ws.diagnostics.filter((d) => d.severity === "error").map((d) => `${d.code}: ${d.message}`);
+  };
+
+  it("writes a saga that parses, with the version the grammar wants", () => {
+    const before = SAGA_MODEL.replace(/\nsaga Checkout[\s\S]*$/, "\n");
+    const mutation = addSaga(where(before), {
+      pkg: "acme.sales",
+      name: "Later",
+      start: "PlaceOrder",
+    });
+    const after = applyAll({ "a.7k": before }, mutation.edits)["a.7k"]!;
+    expect(after).toContain("saga Later v1.0 {");
+    expect(after).toContain("start on PlaceOrder");
+    const ws = buildWorkspace([{ path: "a.7k", source: after }]);
+    expect(ws.model.decls.some((d) => d.kind === "saga" && d.id.name === "Later")).toBe(true);
+  });
+
+  /** A saga with no steps is an error, so the operation writes something the checker complains about. */
+  it("writes one the checker calls incomplete, which is what it is", () => {
+    const before = SAGA_MODEL.replace(/\nsaga Checkout[\s\S]*$/, "\n");
+    const mutation = addSaga(where(before), { pkg: "acme.sales", name: "Later", start: "PlaceOrder" });
+    const after = applyAll({ "a.7k": before }, mutation.edits)["a.7k"]!;
+    expect(checked(after).join(" ")).toContain("saga-liveness");
+  });
+
+  it("refuses a name the package already holds, folding case", () => {
+    const mutation = addSaga(where(), { pkg: "acme.sales", name: "CHECKOUT", start: "PlaceOrder" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("name-taken");
+  });
+
+  it("refuses a start message that does not exist", () => {
+    const mutation = addSaga(where(), { pkg: "acme.sales", name: "Other", start: "Nope" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("no-such-message");
+  });
+
+  it("writes one `on` row per declared reply, and invents nothing else", () => {
+    const mutation = addStep(where(), { saga: "Checkout", name: "ship", send: "Reserve" });
+    const after = applyAll({ "a.7k": SAGA_MODEL }, mutation.edits)["a.7k"]!;
+    const step = after.slice(after.indexOf("step ship"), after.indexOf("on deadline"));
+    expect(step).not.toBe("");
+    expect(step).toContain("send Reserve");
+    expect(step).toContain("on Reserved");
+    expect(step).toContain("on Refused");
+    // Which outcome is a failure is not in the model, so no `reject` is guessed at.
+    expect(step).not.toContain("reject");
+    // Nor are the two absences the saga view already draws for you.
+    expect(step).not.toContain("undo");
+  });
+
+  /** The property the operation exists for. */
+  it("writes a step the checker does not call `unhandled-outcome`", () => {
+    const mutation = addStep(where(), { saga: "Checkout", name: "ship", send: "Reserve", timeout: "30s" });
+    const after = applyAll({ "a.7k": SAGA_MODEL }, mutation.edits)["a.7k"]!;
+    const ws = buildWorkspace([{ path: "a.7k", source: after }]);
+    expect(ws.diagnostics.map((d) => d.code)).not.toContain("unhandled-outcome");
+    expect(checked(after)).toEqual([]);
+  });
+
+  it("writes a timeout that rejects rather than one that continues", () => {
+    const mutation = addStep(where(), { saga: "Checkout", name: "ship", send: "Reserve", timeout: "45s" });
+    const after = applyAll({ "a.7k": SAGA_MODEL }, mutation.edits)["a.7k"]!;
+    expect(after).toContain('on timeout 45s reject "ship timed out"');
+  });
+
+  it("puts the step before the terminals rather than after them", () => {
+    const mutation = addStep(where(), { saga: "Checkout", name: "ship", send: "Reserve" });
+    const after = applyAll({ "a.7k": SAGA_MODEL }, mutation.edits)["a.7k"]!;
+    expect(after.indexOf("step ship")).toBeLessThan(after.indexOf("on complete"));
+  });
+
+  it("refuses a step name the saga already has, folding case", () => {
+    const mutation = addStep(where(), { saga: "Checkout", name: "HOLD", send: "Reserve" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("step-taken");
+  });
+
+  /** `replies none` is a declared outcome space with nothing in it, which is worth saying out loud. */
+  it("says so when nothing declares what the message results in", () => {
+    const mutation = addStep(where(), { saga: "Checkout", name: "ask", send: "PlaceOrder" });
+    expect(mutation.edits.length).toBe(1);
+    expect(mutation.diagnostics.map((d) => d.code)).toContain("no-declared-outcomes");
+  });
+
+  it("changes nothing outside the span it edits", () => {
+    const files = { "a.7k": SAGA_MODEL };
+    const mutation = addStep(where(), { saga: "Checkout", name: "ship", send: "Reserve" });
+    outsideUnchanged(files, applyAll(files, mutation.edits), mutation.edits);
+  });
+});
+
+/**
+ * Line endings, which every operation got wrong until a saga was added to a file that had CRLF.
+ *
+ * An operation writes `\n`, because that is what writing text here looks like. A checked-out `.7k` on
+ * Windows is usually CRLF, and splicing LF into it leaves a seam of `\r\n\n` and a file with two kinds
+ * of ending. Nothing fails loudly: it parses, it checks out, and it surfaces later as a whole-file
+ * diff the first time anything normalises it — which is the edit section 7.2 promises not to make.
+ */
+describe("line endings", () => {
+  const crlf = (text: string): string => text.replace(/\n/g, "\r\n");
+  const mixed = (text: string): number => (text.match(/[^\r]\n/g) ?? []).length;
+
+  it("splices into a CRLF file without mixing them", () => {
+    const source = crlf(SAGA_MODEL);
+    expect(mixed(source)).toBe(0);
+    const where = editable({ "a.7k": source });
+    const mutation = addStep(where, { saga: "Checkout", name: "ship", send: "Reserve", timeout: "30s" });
+    const after = applyAll({ "a.7k": source }, mutation.edits)["a.7k"]!;
+    expect(mixed(after)).toBe(0);
+  });
+
+  it("leaves an LF file alone", () => {
+    const where = editable({ "a.7k": SAGA_MODEL });
+    const mutation = addStep(where, { saga: "Checkout", name: "ship", send: "Reserve" });
+    const after = applyAll({ "a.7k": SAGA_MODEL }, mutation.edits)["a.7k"]!;
+    expect(after.includes("\r")).toBe(false);
+  });
+
+  it("still leaves exactly one blank line before the step, CRLF or not", () => {
+    for (const source of [SAGA_MODEL, crlf(SAGA_MODEL)]) {
+      const where = editable({ "a.7k": source });
+      const mutation = addStep(where, { saga: "Checkout", name: "ship", send: "Reserve" });
+      const after = applyAll({ "a.7k": source }, mutation.edits)["a.7k"]!.replace(/\r\n/g, "\n");
+      const at = after.indexOf("  step ship");
+      expect(after.slice(at - 3, at)).toBe("}\n\n");
+    }
+  });
+
+  it("holds for the operations that were already here", () => {
+    const source = crlf(SALES);
+    const where = editable({ "sales.7k": source, "tickets.7k": TICKETS });
+    const mutation = addPipe(where, { pkg: "acme.sales", name: "audit", kind: "topic" });
+    const after = applyAll({ "sales.7k": source, "tickets.7k": TICKETS }, mutation.edits)["sales.7k"]!;
+    expect(mixed(after)).toBe(0);
   });
 });

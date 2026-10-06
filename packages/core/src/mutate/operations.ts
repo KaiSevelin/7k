@@ -14,7 +14,7 @@
 
 import { childNodes, isToken, tokens, type CstNode } from "../cst.js";
 import type { Diagnostic, Span } from "../diagnostics.js";
-import { qualify, symbolKey, type Decl, type NodeId, type ServiceIr } from "../ir/model.js";
+import { qualify, symbolKey, type Decl, type NodeId, type SagaIr, type ServiceIr } from "../ir/model.js";
 import type { LinkedModel } from "../ir/link.js";
 import { refuse, type Mutation, type TextEdit } from "./edit.js";
 
@@ -28,6 +28,14 @@ export interface Editable {
 const error = (code: string, message: string, span: Span): Diagnostic => ({
   code,
   severity: "error",
+  message,
+  span,
+});
+
+/** Said rather than refused: an edit somebody should know about is still an edit. */
+const warn = (code: string, message: string, span: Span): Diagnostic => ({
+  code,
+  severity: "warning",
   message,
   span,
 });
@@ -319,6 +327,246 @@ export function addPipe(
     `pipe ${what.name} : ${kind} {\n  retention ${retention}\n}\n`,
   );
 }
+
+
+// ---- sagas ------------------------------------------------------------------
+
+/**
+ * `saga X v1.0 { start on M }`, appended to a package's file.
+ *
+ * The version is written because the grammar requires one (`10-grammar.md`: `sagaDecl = anns "saga"
+ * ident version body(...)`), and `v1.0` because a saga nobody has versioned yet is at its first.
+ *
+ * No steps and no terminals: both are decisions, and the checker says so until they are made. An
+ * operation that filled them in would be inventing a process.
+ */
+export function addSaga(
+  editable: Editable,
+  what: AddTo & { readonly start: string; readonly keyedBy?: string },
+): Mutation {
+  const describe = `add saga ${what.name} to ${what.pkg}`;
+  const start = findDecl(editable.model, what.start, "message");
+  if (start === undefined) {
+    return refuse("addSaga", describe, [
+      error("no-such-message", `no message \`${what.start}\``, nowhere("")),
+    ]);
+  }
+
+  const ref = referenceTo(editable.model, what.pkg, start.id);
+  const keyed = what.keyedBy === undefined ? "" : ` keyed by ${what.keyedBy}`;
+  const mutation = addDecl(
+    editable,
+    what,
+    "addSaga",
+    `saga ${what.name} v1.0 {\n  start on ${ref.text}${keyed}\n}\n`,
+  );
+  // A reference needing an import the package does not have is said, not silently written.
+  return ref.problem === undefined
+    ? mutation
+    : { ...mutation, diagnostics: [...mutation.diagnostics, warn("needs-import", ref.problem, start.span)] };
+}
+
+/**
+ * `step name { send M; on A; on B }`, added to a saga.
+ *
+ * **The outcomes are not asked for, because the model has already declared them.** Section 2.1 says
+ * `replies` is exactly what handling a message can result in, so the `on` rows of a step that sends it
+ * are derivable: one per reply, and the set is complete. A step written by hand is how you get
+ * `unhandled-outcome` — "sends X but handles no Y, so it waits for its timeout when that comes back" —
+ * and a step written from the declaration cannot.
+ *
+ * **Which outcome is a failure is not derivable, and is not guessed.** Every row is written as a bare
+ * `on A`, which is `continue`; turning one into `reject "..."` is a visible edit on a line that is
+ * already there. Naming one by its spelling — anything containing `Failed`, `Rejected` — would be the
+ * editor inventing semantics the language does not carry.
+ *
+ * The timeout and the inverse are left out for the same reason, and the saga view already draws both
+ * absences: `no timeout` and `no inverse` are what it shows, so the gap is visible where it matters.
+ */
+export function addStep(
+  editable: Editable,
+  what: {
+    readonly saga: string;
+    readonly name: string;
+    readonly send: string;
+    /**
+     * `30s`, `24h`. Optional, and the caller is the one who knows.
+     *
+     * Offered rather than left to a later edit, because a step without one is legal only while the
+     * saga has a `deadline`: `saga-liveness` is an error, not a warning — "has no `timeout` and the
+     * saga has no `deadline`, so nothing will ever end this wait". Left out, the preview says exactly
+     * that, which is an honest outcome rather than a hidden one.
+     */
+    readonly timeout?: string;
+  },
+): Mutation {
+  const describe = `add step ${what.name} to ${what.saga}`;
+  const { model } = editable;
+
+  const saga = findDecl(model, what.saga, "saga");
+  if (saga === undefined || saga.kind !== "saga") {
+    return refuse("addStep", describe, [
+      error("no-such-saga", `no saga \`${what.saga}\``, nowhere("")),
+    ]);
+  }
+  if (saga.steps.some((step) => step.name.toLowerCase() === what.name.toLowerCase())) {
+    return refuse("addStep", describe, [
+      error(
+        "step-taken",
+        `\`${saga.id.name}\` already has a step \`${what.name}\`, and names fold case`,
+        saga.span,
+      ),
+    ]);
+  }
+
+  const message = findDecl(model, what.send, "message");
+  if (message === undefined) {
+    return refuse("addStep", describe, [
+      error("no-such-message", `no message \`${what.send}\``, nowhere("")),
+    ]);
+  }
+
+  const source = editable.sources[saga.span.file];
+  if (source === undefined) {
+    return refuse("addStep", describe, [
+      error("no-file", `\`${saga.id.name}\` has no file to add to`, saga.span),
+    ]);
+  }
+
+  const ref = referenceTo(model, saga.id.pkg, message.id);
+  const rows = outcomesOf(model, message.id).map((out) => {
+    const to = referenceTo(model, saga.id.pkg, out);
+    return `    on ${to.text}\n`;
+  });
+
+  // A bare `on timeout 30s` would mean *continue* on timeout, which is almost never what a timeout
+  // is for and would be a silent trap. The reason is the step's own name: a line somebody can
+  // improve, rather than one they have to notice is missing.
+  const timedOut =
+    what.timeout === undefined || what.timeout === ""
+      ? ""
+      : `    on timeout ${what.timeout} reject "${what.name} timed out"\n`;
+
+  const at = stepInsertion(saga, source);
+
+  // Exactly one blank line on each side, whatever was there already. Worked out from the text
+  // rather than assumed: the anchor is the start of a line that may or may not have a blank one
+  // above it, and assuming gave the step two blank lines before it and none after.
+  // Counted on a normalised view, because the file may be CRLF and `"\r\n\r\n"` does not end
+  // with `"\n\n"`. Reading it as one newline rather than two put a second blank line in, which is the
+  // same confusion `apply` now settles on the way out.
+  const before = source.slice(0, at).replace(/\r\n/g, "\n");
+  const lead = before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+
+  const text =
+    `${lead}  step ${what.name} {\n    send ${ref.text}\n` +
+    (rows.length === 0 && timedOut === "" ? "" : `\n${rows.join("")}${timedOut}`) +
+    `  }\n\n`;
+
+  const diagnostics: Diagnostic[] = [];
+  if (ref.problem !== undefined) diagnostics.push(warn("needs-import", ref.problem, message.span));
+  if (rows.length === 0) {
+    diagnostics.push(
+      warn(
+        "no-declared-outcomes",
+        `nothing declares what handling \`${message.id.name}\` results in, so this step awaits nothing ` +
+          "and can only end in its own timeout",
+        message.span,
+      ),
+    );
+  }
+
+  return {
+    op: "addStep",
+    describe,
+    edits: [{ file: saga.span.file, start: at, end: at, text }],
+    diagnostics,
+  };
+}
+
+/**
+ * What handling a message can result in, as some service declared it.
+ *
+ * Read off the subscription rather than off the message, because that is where `replies` lives: a
+ * message does not know what answering it looks like, and the service that reacts to it does. `none`
+ * is a declared outcome space with nothing in it, which is a sink, and produces no rows.
+ */
+function outcomesOf(model: LinkedModel, message: NodeId): NodeId[] {
+  const out: NodeId[] = [];
+  const seen = new Set<string>();
+  for (const decl of model.decls) {
+    if (decl.kind !== "service") continue;
+    for (const react of decl.reacts) {
+      const target = model.resolve(react.message);
+      if (target === undefined || qualify(target) !== qualify(message)) continue;
+      for (const reply of react.replies ?? []) {
+        if (reply === "none") continue;
+        const id = model.resolve(reply);
+        if (id === undefined) continue;
+        const key = qualify(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(id);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Where a new step goes: after the last thing that is a step, and before the terminals.
+ *
+ * A saga's items may be written in any order, so this is about reading rather than about parsing. A
+ * step appended after `on complete send ...` parses and reads as an afterthought, so the anchor is the
+ * first terminal clause's own line when there is one, and the closing brace otherwise.
+ */
+/**
+ * The start of the comment that belongs to the line at `at`, or `at` itself.
+ *
+ * A clause and the comment above it are one thing to a reader, and inserting between them leaves the
+ * comment explaining whatever landed there instead. The example model has two lines about why a saga's
+ * deadline is longer than its steps' timeouts, directly above `on deadline`; a step written between
+ * the two made those lines read as though they were about the step.
+ *
+ * Contiguous `//` lines only, stopping at a blank one, which is where a comment block stops belonging
+ * to what follows it.
+ */
+function aboveItsComment(source: string, at: number): number {
+  let start = at;
+  for (;;) {
+    const previousEnd = start - 1;
+    if (previousEnd <= 0) return start;
+    const previousStart = source.lastIndexOf("\n", previousEnd - 1) + 1;
+    const line = source.slice(previousStart, previousEnd).trim();
+    if (!line.startsWith("//")) return start;
+    start = previousStart;
+  }
+}
+
+function stepInsertion(saga: SagaIr, source: string): number {
+  const anchors: number[] = saga.terminals.map((t) => t.send.span.start);
+
+  // `on deadline 24h abandon` is a terminal clause too and reads with the others, but it carries no
+  // `send`, so the IR has only its milliseconds and no span to aim at. Found in the saga's own text
+  // instead — a bounded search inside one declaration, not a scan of the file.
+  const body = source.slice(saga.span.start, saga.span.end);
+  const deadline = /(^|\n)\s*on\s+deadline\b/.exec(body);
+  if (deadline !== null) {
+    anchors.push(saga.span.start + deadline.index + (deadline[1] === "" ? 0 : 1));
+  }
+
+  const first = anchors.sort((a, b) => a - b)[0];
+  if (first !== undefined) {
+    const lineStart = source.lastIndexOf("\n", first);
+    if (lineStart >= 0) return aboveItsComment(source, lineStart + 1);
+  }
+  // The saga's own closing brace, which its span ends just after.
+  const closing = source.lastIndexOf("}", saga.span.end);
+  if (closing < 0) return saga.span.end;
+  const lineStart = source.lastIndexOf("\n", closing);
+  return lineStart < 0 ? closing : lineStart + 1;
+}
+
 
 function addDecl(editable: Editable, what: AddTo, op: string, text: string): Mutation {
   const describe = `${op.replace("add", "add ").toLowerCase()} ${what.name} to ${what.pkg}`;

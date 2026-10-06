@@ -56,6 +56,22 @@ export const isPossible = (mutation: Mutation): boolean =>
  * Overlapping edits are refused rather than silently resolved: two edits to one range mean the caller
  * believes two different things about the file.
  */
+/**
+ * The line ending a file already uses.
+ *
+ * By majority rather than by first sighting, so one stray `\r\n` in an LF file does not convert the
+ * whole of an inserted clause.
+ */
+export function lineEndingOf(source: string): "\n" | "\r\n" {
+  const crlf = (source.match(/\r\n/g) ?? []).length;
+  const lf = (source.match(/\n/g) ?? []).length - crlf;
+  return crlf > lf ? "\r\n" : "\n";
+}
+
+/** Text written with `\n`, in the endings a particular file uses. */
+const inEndings = (text: string, endings: "\n" | "\r\n"): string =>
+  endings === "\n" ? text : text.replace(/\r?\n/g, "\r\n");
+
 export function apply(source: string, edits: readonly TextEdit[]): string {
   const sorted = [...edits].sort((a, b) => b.start - a.start || b.end - a.end);
 
@@ -69,9 +85,20 @@ export function apply(source: string, edits: readonly TextEdit[]): string {
     }
   }
 
+  // An operation writes its text with `\n`, because that is what writing text in this
+  // repository looks like. The file it goes into may not: on Windows a checked-out `.7k` is
+  // usually CRLF, and splicing LF into it leaves `\r\n\n` at the seam and a file with two
+  // kinds of line ending in it. Nothing downstream fails loudly — it parses, it checks out, and it
+  // shows up as a whole-file diff the next time anything normalises it, which is exactly the kind
+  // of edit section 7.2 promises not to make.
+  //
+  // Done here rather than in each operation because here is where the file is in hand, and an
+  // operation that forgot would be a bug nobody sees on a machine that checks out LF.
+  const endings = lineEndingOf(source);
+
   let out = source;
   for (const edit of sorted) {
-    out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+    out = out.slice(0, edit.start) + inEndings(edit.text, endings) + out.slice(edit.end);
   }
   return out;
 }

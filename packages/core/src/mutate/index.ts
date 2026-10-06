@@ -40,7 +40,9 @@ export {
 
 export {
   addPipe,
+  addSaga,
   addService,
+  addStep,
   connectEmit,
   connectReact,
   disconnectEmit,
