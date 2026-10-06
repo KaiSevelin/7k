@@ -1,6 +1,13 @@
 {
-  // The three repositories as one window. Open this file and press F5: Spider starts with the parcel
+  // The three repositories as one window.
+  //
+  // **File > Open Workspace from File…**, and pick this file — or click the `Open Workspace` button
+  // VS Code shows when this file is open in an editor. Then press F5: Spider starts with the parcel
   // locker example loaded and the browser opens itself.
+  //
+  // Opening it as a *text file* and pressing F5 is not the same thing. There is no workspace open, so
+  // no launch configuration applies, and VS Code falls back to debugging whatever is in the active
+  // editor — which is this, and which it will offer to find a `JSON with Comments` debugger for.
   //
   // It lives here because 7K is the hub — the other two depend on `@sevenk/core` and neither depends
   // on the other. The folders are siblings of this one; if you have only cloned 7k, VS Code will show

@@ -340,11 +340,18 @@ scenario CardDeclinedRefundsNothing {
 
 ## The tooling
 
-**In VS Code**, open [`7k.code-workspace`](7k.code-workspace) and press <kbd>F5</kbd>: Spider starts
-with the parcel locker example loaded and the browser opens itself. The file puts all three
-repositories in one window — they are expected to be siblings on disk — and its launch list also holds
-`7k check`, the sandbox against the example's scenarios, and vitest for whichever repository the open
-file belongs to.
+**In VS Code**: *File > Open Workspace from File…* and pick
+[`7k.code-workspace`](7k.code-workspace), then press <kbd>F5</kbd>. Spider starts with the parcel
+locker example loaded and the browser opens itself.
+
+*Open Workspace from File*, not *Open File* — opening it as text leaves no workspace open, so
+<kbd>F5</kbd> tries to debug the editor instead and offers to find a `JSON with Comments` debugger.
+The same button appears in the editor if you do open it as text.
+
+The workspace puts all three repositories in one window — they are expected to be siblings on disk —
+and its launch list also holds `7k check`, the sandbox against the example's scenarios, and vitest for
+whichever repository the open file belongs to. Opening this folder on its own also works:
+<kbd>F5</kbd> runs the same demo.
 
 ```
 npm install
