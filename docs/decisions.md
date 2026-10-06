@@ -3294,6 +3294,70 @@ same reason: it is not a choice somebody might have meant.
 
 ---
 
+## D106 — A bare word in `where` is an enum member, and the clause decides that
+
+In a `where` or a `requires`, an unscoped word lowers to its own name as a string. In an `invariant` it
+stays a path into the message, as it was. `unknown-enum-member` reports a word that is not a member of
+the enum the compared field is declared as.
+
+**Why:** `where envelope.channel == Kiosk` was false for every message, and nothing said so.
+
+The right side lowered as a path into the message body, so the filter read a field called `Kiosk`, found
+nothing, and a comparison with an absent operand is false. On a topic the subscriber received nothing at
+all; on a queue it is worse, because every subscription declining a message is `filter-on-queue` — the
+message is consumed and gone. There was no diagnostic at either end.
+
+**This was in the specification's own example** (3-topology 2.5) and in the example model:
+`KioskBridge` in `examples/sales.7k` carries the comment "only this channel's tickets" above a filter
+that delivered none of them. Two years of a model that checked, with a dead subscription in it. No
+scenario covered that subscription, which is how it survived — and is the argument for the check rather
+than against it.
+
+**The grammar said it was invalid and the parser accepted it.** `operand = scopedPath | literal` admits
+no bare word, so strictly the example did not parse as written; the parser took it as a path because a
+path is what the production for the other clause allows. Two defects pointing at one omission: the
+language never said what a member reference looks like in a predicate. The grammar now has `memberRef`.
+
+**The clause decides what a bare word means**, which is the part worth stating. It cannot be decided
+from the word:
+
+- an `invariant` compares paths into the message — `total.currency == paid.currency` — so a bare word
+  there is a field, and must stay one;
+- a `where` reads the envelope and a `requires` reads the envelope or a claim, and both must say so
+  (`03-topology.md` 2.5). A bare word in either is therefore never a field, because a field would have
+  had to be written `message.x`, which those clauses already reject.
+
+So the convention is a parameter of lowering rather than a property of the syntax, and the one place
+each clause is lowered is where it is supplied.
+
+**Not by casing**, which was the first idea and is wrong. Enums are `PascalCase` by the style rule, so
+`Kiosk` looks like a member and `channel` like a field — but names fold case (D40), so `kiosk` is the
+same name as `Kiosk` and a casing rule would make it a field instead. A rule that changes meaning when
+you change case contradicts the rule that case does not change meaning.
+
+**The check is the half that matters.** Lowering a bare word to its name fixes the common case and
+leaves a worse one: a misspelling becomes a filter that is false for every message, silently, exactly as
+before. `unknown-enum-member` resolves the compared field's declared type — through a `value`'s base,
+and through the package's envelopes (D50) — and requires the word to be a member. It reports the quoted
+form too, since `== "Kiosh"` is the same mistake, and it names the member when only the case is wrong,
+because that is the error somebody will otherwise stare at.
+
+**Invariants keep their meaning, and gain a check.** `invariant status != Cancelled` is a reasonable
+thing to want and is still not supported: a bare word there is a field, so it compares `status` to a
+field called `Cancelled`. Supporting it needs a rule for when a word is a member and when it is a field
+*within one clause*, which means deciding what happens if a record has a field named like a member —
+shadowing, not a lowering detail. That stays open.
+
+What could not stay open is the silence. An invariant is evaluated on receipt (D89) and a comparison
+with an absent operand is false, so that line rejects **every** message, including the ones it should
+accept — the same defect as the `where` case and with a worse blast radius, since a filter that matches
+nothing drops traffic while an invariant that holds for nothing refuses all of it.
+`invariant-unknown-field` reports a bare path whose first segment names no field of the holder, which
+is wrong under every possible answer to the shadowing question, and suggests the quoted form. It catches
+plain typos as well — `totl.currency` was equally silent — which is the better argument for it.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.

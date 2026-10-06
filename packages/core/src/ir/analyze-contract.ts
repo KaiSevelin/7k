@@ -17,6 +17,7 @@ import type { LinkedModel } from "./link.js";
 import type { Operand, Predicate } from "./predicate.js";
 import { coverageOf, overlapOf, showWitness } from "./partition.js";
 import {
+  flatFields,
   isAncestorPackage,
   qualify,
   symbolKey,
@@ -24,6 +25,7 @@ import {
   type MessageIr,
   type PipeIr,
   type ServiceIr,
+  type TypeIr,
   type ValueIr,
 } from "./model.js";
 
@@ -36,6 +38,8 @@ export function analyzeContract(model: LinkedModel): Diagnostic[] {
     ...filterScopes(model),
     ...filtersOnQueues(model),
     ...filtersOverlap(model),
+    ...unknownEnumMembers(model),
+    ...invariantFields(model),
     ...internalScopes(model),
     ...carriedMessages(model),
     ...valueNarrowing(model),
@@ -151,9 +155,9 @@ function filterScopes(model: LinkedModel): Diagnostic[] {
       if (react.where === undefined) continue;
 
       for (const operand of operandsOf(react.where)) {
-        // `message` and `claim` only. A bare path cannot be told from an enum member without
-        // types — `envelope.channel == Kiosk` lowers its right side as a path — and reading
-        // the body has to be written `message.x` anyway, which this does catch.
+        // `message` and `claim` only. A bare word in a `where` is an enum member rather than a
+        // path (D106), so there is nothing left to confuse it with, and reading the body has to
+        // be written `message.x` anyway, which this does catch.
         if (operand.k !== "message" && operand.k !== "claim") continue;
 
         const reads = operand.k === "claim" ? `claim.${operand.name}` : `message.${operand.path.join(".")}`;
@@ -329,6 +333,199 @@ function filtersOverlap(model: LinkedModel): Diagnostic[] {
         });
       }
     }
+  }
+
+  return out;
+}
+
+
+/**
+ * A name compared against an enum-typed field that is not one of its members.
+ *
+ * A bare word in a `where` or a `requires` is an enum member, and an enum member on the wire is its
+ * name as written (`01-kernel.md` section 7). So `envelope.channel == Kiosk` compares against the
+ * string `"Kiosk"`, and the comparison is only ever true if `Kiosk` is really a member.
+ *
+ * **This check is what makes that lowering safe.** Without it a misspelling — or the right member in
+ * the wrong case, since names fold case (D40) but values do not — would compile to a filter that is
+ * false for every message. On a queue that is the `filter-on-queue` hazard arriving silently: the
+ * message is declined by everyone, consumed, and gone. The old behaviour had exactly this defect for
+ * *every* enum comparison, which is the bug D106 fixes; a check that lets it back in for typos would
+ * be fixing the easy half.
+ *
+ * Reported for the quoted form too. `== "Kiosh"` is the same mistake and deserves the same answer.
+ */
+function unknownEnumMembers(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  /** Follows a path through a record's fields, answering the type it lands on. */
+  const walk = (fields: readonly { name: string; type: TypeIr }[], path: readonly string[]): TypeIr | undefined => {
+    const [head, ...rest] = path;
+    if (head === undefined) return undefined;
+    const field = fields.find((f) => f.name.toLowerCase() === head.toLowerCase());
+    if (field === undefined) return undefined;
+    if (rest.length === 0) return field.type;
+    if (field.type.t !== "ref") return undefined;
+    const target = model.declFor(field.type.ref);
+    if (target === undefined || (target.kind !== "record" && target.kind !== "envelope")) return undefined;
+    return walk(flatFields((r) => model.declFor(r), target), rest);
+  };
+
+  /** The declared type of an `envelope.x.y` path, read from the package's envelopes (D50). */
+  const envelopeType = (pkg: string, path: readonly string[]): TypeIr | undefined => {
+    for (const ref of model.packages.get(pkg)?.envelopes ?? []) {
+      const envelope = model.declFor(ref);
+      if (envelope?.kind !== "envelope") continue;
+      const found = walk(flatFields((r) => model.declFor(r), envelope), path);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+
+  /** The members of the enum a type names, if it names one — through a value's base as well. */
+  const membersOf = (type: TypeIr | undefined, depth = 0): readonly string[] | undefined => {
+    if (type === undefined || type.t !== "ref" || depth > 8) return undefined;
+    const target = model.declFor(type.ref);
+    if (target === undefined) return undefined;
+    if (target.kind === "enum") return target.members.map((m) => m.name);
+    if (target.kind === "value") return membersOf(target.base, depth + 1);
+    return undefined;
+  };
+
+  const check = (predicate: Predicate, pkg: string, clause: string): void => {
+    for (const cmp of comparisonsOf(predicate)) {
+      if (cmp.left.k !== "envelope") continue;
+      const members = membersOf(envelopeType(pkg, cmp.left.path));
+      if (members === undefined || members.length === 0) continue;
+
+      const written: string[] =
+        cmp.right.k === "literal" && typeof cmp.right.value === "string"
+          ? [cmp.right.value]
+          : cmp.right.k === "list"
+            ? cmp.right.values.filter((v): v is string => typeof v === "string")
+            : [];
+
+      for (const word of written) {
+        if (members.includes(word)) continue;
+        const near = members.find((m) => m.toLowerCase() === word.toLowerCase());
+        out.push({
+          code: "unknown-enum-member",
+          severity: "error",
+          message:
+            `\`${clause} envelope.${cmp.left.path.join(".")}\` compares against \`${word}\`, which is ` +
+            (near === undefined
+              ? `not a member — the members are ${members.map((m) => `\`${m}\``).join(", ")}`
+              : `\`${near}\` in a different case; a member travels as its name as written, so this ` +
+                "comparison is false for every message"),
+          span: cmp.span,
+        });
+      }
+    }
+  };
+
+  for (const service of servicesOf(model)) {
+    for (const react of service.reacts) {
+      if (react.where !== undefined) check(react.where, service.id.pkg, "where");
+      if (react.requires !== undefined) check(react.requires, service.id.pkg, "requires");
+    }
+  }
+
+  return out;
+}
+
+/** Every comparison in a predicate, which is where a literal can be wrong. */
+function comparisonsOf(
+  predicate: Predicate,
+  out: Extract<Predicate, { p: "cmp" }>[] = [],
+): Extract<Predicate, { p: "cmp" }>[] {
+  switch (predicate.p) {
+    case "and":
+    case "or":
+      for (const p of predicate.operands) comparisonsOf(p, out);
+      return out;
+    case "not":
+      return comparisonsOf(predicate.operand, out);
+    case "cmp":
+      out.push(predicate);
+      return out;
+    default:
+      return out;
+  }
+}
+
+
+/**
+ * An invariant comparing against something that is not a field of what holds it.
+ *
+ * A bare path in an `invariant` is a path into the record being checked, and nothing else. So this is
+ * well formed:
+ *
+ * ```7k
+ * invariant total.currency == lines[].unit.currency
+ * ```
+ *
+ * and this is not, though it reads perfectly:
+ *
+ * ```7k
+ * invariant status != Cancelled      // `Cancelled` is an enum member, not a field
+ * ```
+ *
+ * The second compares `status` to a field called `Cancelled`, which does not exist. A comparison with
+ * an absent operand is false, so the invariant fails for **every** message — including the ones that
+ * are fine. An invariant is evaluated on receipt (D89), so that is every message rejected, from a line
+ * whose intent is obvious to any reader.
+ *
+ * This is D106's defect in the other clause. There it was fixed by lowering a bare word to its name,
+ * which cannot be done here: a `where` reads the envelope so a bare word is never a field, while an
+ * invariant's bare words are mostly fields, and telling the two apart inside one clause means deciding
+ * what happens when a record has a field named like an enum member. That is a question about shadowing
+ * and it is not answered yet (D106).
+ *
+ * What does not need answering is this: a path naming neither a field nor anything else is wrong under
+ * every possible answer. So it is reported, the quoted form is suggested because it works today, and
+ * the shadowing question stays open without a silent always-false invariant waiting on it.
+ */
+function invariantFields(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  const check = (
+    holder: { readonly kind: string; readonly id: { readonly name: string } },
+    fields: readonly { readonly name: string }[],
+    invariants: readonly Predicate[],
+  ): void => {
+    const names = new Set(fields.map((f) => f.name.toLowerCase()));
+
+    for (const cmp of comparisonsOf(invariants.length === 0 ? { p: "and", operands: [] } : { p: "and", operands: invariants })) {
+      for (const operand of [cmp.left, cmp.right]) {
+        if (operand.k !== "field") continue;
+        // `[]` projects and `.size` reads a length; neither is a field name, and the first segment
+        // is what has to exist for the rest of the path to mean anything.
+        const head = operand.path[0];
+        if (head === undefined || head === "[]" || head === "size") continue;
+        if (names.has(head.toLowerCase())) continue;
+
+        const enumMember = model.decls.some(
+          (d) => d.kind === "enum" && d.members.some((m) => m.name.toLowerCase() === head.toLowerCase()),
+        );
+
+        out.push({
+          code: "invariant-unknown-field",
+          severity: "error",
+          message:
+            `\`${head}\` is not a field of \`${holder.id.name}\`, so this invariant is false for every ` +
+            (enumMember
+              ? `message — a bare word here is a field, not an enum member; write \`"${head}"\``
+              : "message, including the ones it should accept"),
+          span: cmp.span,
+        });
+      }
+    }
+  };
+
+  for (const decl of model.decls) {
+    if (decl.kind !== "message" && decl.kind !== "record") continue;
+    if (decl.invariants.length === 0) continue;
+    check(decl, flatFields((r) => model.declFor(r), decl), decl.invariants);
   }
 
   return out;

@@ -97,7 +97,22 @@ const literalOf = (tok: { kind: string; text: string; keyword?: string }): JsonV
   }
 };
 
-function operandOf(child: CstNode | undefined, file: string): Operand | undefined {
+/**
+ * What a bare, unscoped path means in this clause.
+ *
+ * `field` — a path into the message being checked, which is what an `invariant` compares.
+ * `name` — a declared name, which in a predicate can only be an enum member. `where` and `requires`
+ * read the envelope or a claim and must say so (`03-topology.md` 2.5), so a bare word there is never a
+ * field; it is `Kiosk` in `envelope.channel == Kiosk`, and an enum member on the wire is its name as
+ * written (`01-kernel.md` section 7).
+ */
+export type BareMeaning = "field" | "name";
+
+function operandOf(
+  child: CstNode | undefined,
+  file: string,
+  bare: BareMeaning,
+): Operand | undefined {
   if (child === undefined) return undefined;
 
   if (child.kind === "ScopedPath") {
@@ -114,7 +129,13 @@ function operandOf(child: CstNode | undefined, file: string): Operand | undefine
     return scope === "envelope" ? { k: "envelope", path } : { k: "message", path };
   }
 
-  if (child.kind === "Path") return { k: "field", path: pathOf(child) };
+  if (child.kind === "Path") {
+    const path = pathOf(child);
+    if (bare === "field") return { k: "field", path };
+    // The last segment, so a qualified `shared.Kiosk` reads as the member it names. Whether the
+    // member exists is `unknown-enum-member`'s question, not this one's.
+    return { k: "literal", value: path.at(-1) ?? "" };
+  }
 
   if (child.kind === "Json") {
     // A bracketed list: `in ["operator", "admin"]`.
@@ -134,7 +155,11 @@ function operandOf(child: CstNode | undefined, file: string): Operand | undefine
  * comparisons flat, so this reads whichever it finds rather than relying on a
  * particular nesting.
  */
-export function lowerPredicate(n: CstNode | undefined, file: string): Predicate {
+export function lowerPredicate(
+  n: CstNode | undefined,
+  file: string,
+  bare: BareMeaning = "field",
+): Predicate {
   if (n === undefined) return { p: "unknown", text: "", span: { file, start: 0, end: 0 } };
   const span: Span = { file, start: n.start, end: n.end };
 
@@ -149,15 +174,15 @@ export function lowerPredicate(n: CstNode | undefined, file: string): Predicate 
     // Mixed `and`/`or` without parentheses is left to the checker; `and` binds
     // tighter, so a mixed chain lowers as `or` over `and` groups.
     const kind = connectives.includes("or") ? "or" : "and";
-    return { p: kind, operands: nested.map((c) => lowerPredicate(c, file)) };
+    return { p: kind, operands: nested.map((c) => lowerPredicate(c, file, bare)) };
   }
 
   if (not !== undefined && nested.length === 1) {
-    return { p: "not", operand: lowerPredicate(nested[0], file) };
+    return { p: "not", operand: lowerPredicate(nested[0], file, bare) };
   }
 
   if (nested.length === 1 && childNodes(n).length === 1) {
-    const inner = lowerPredicate(nested[0], file);
+    const inner = lowerPredicate(nested[0], file, bare);
     return not === undefined ? inner : { p: "not", operand: inner };
   }
 
@@ -165,8 +190,8 @@ export function lowerPredicate(n: CstNode | undefined, file: string): Predicate 
   const operandNodes = n.children.filter(
     (c): c is CstNode => isNode(c) && c.kind !== "Predicate",
   );
-  const left = operandOf(operandNodes[0], file);
-  const right = operandOf(operandNodes[1], file);
+  const left = operandOf(operandNodes[0], file, bare);
+  const right = operandOf(operandNodes[1], file, bare);
 
   const opToken = childTokens(n).find(
     (t) => COMPARE.includes(t.text) || t.keyword === "in" || t.keyword === "contains",

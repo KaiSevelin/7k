@@ -234,13 +234,17 @@ orExpr       = andExpr { "or" andExpr } ;
 andExpr      = unary { "and" unary } ;
 unary        = [ "not" ] ( comparison | "(" predicate ")" ) ;
 comparison   = operand compOp operand
-             | operand "in" "[" literal { "," literal } "]"
-             | operand "contains" literal ;
+             | operand "in" "[" operand { "," operand } "]"
+             | operand "contains" operand ;
 compOp       = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
-operand      = scopedPath | literal ;
+operand      = scopedPath | literal | memberRef ;
 scopedPath   = "claim"    ( "." ident | "[" strLit "]" )
              | "envelope" "." path
              | "message"  "." path ;
+memberRef    = [ ident "." ] ident ;      (* an enum member: `Kiosk`, or
+                                             `Channel.Kiosk`. Only in `where`
+                                             and `requires`; a bare path in an
+                                             `invariant` is a field. D106 *)
 path         = ident { "." ident | "[]" } ;
 ```
 

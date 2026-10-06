@@ -392,6 +392,13 @@ reacts OrderPlaced from events {
 
 **`where` may reference the envelope only** — never the message body, and never a claim.
 
+**A bare word is an enum member**, not a path. `Kiosk` above is `Channel.Kiosk`, and it compares
+against the string the member travels as — its name as written (`01-kernel.md` section 7). There is
+nothing for a bare word to be confused with here, because reading the body must be written
+`message.x` and a claim `claim.x`, so both are already excluded. Whether the member exists is checked
+(`unknown-enum-member`): names fold case (D40) but values do not, so `== kiosk` is reported rather than
+left as a filter that is false for every message.
+
 That boundary is not arbitrary. The envelope exists to carry what you dispatch on (`02-contract.md`
 section 4), and it is the only tier a broker can filter efficiently: Service Bus filters on properties, SNS
 on message attributes, and nothing filters a payload body cheaply. A predicate over body content is also a

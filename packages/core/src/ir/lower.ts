@@ -631,10 +631,10 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
         ? { dedupe: { none: true as const } }
         : { dedupe: { by: joinAll(childNodes(oncePer, "Path")[0] ?? oncePer).trim() } }),
     ...(whereClause !== undefined
-      ? { where: lowerPredicate(childNodes(whereClause, "Predicate")[0], ctx.file) }
+      ? { where: lowerPredicate(childNodes(whereClause, "Predicate")[0], ctx.file, "name") }
       : {}),
     ...(requiresClause !== undefined
-      ? { requires: lowerPredicate(childNodes(requiresClause, "Predicate")[0], ctx.file) }
+      ? { requires: lowerPredicate(childNodes(requiresClause, "Predicate")[0], ctx.file, "name") }
       : {}),
     ...(replies !== undefined ? { replies } : {}),
     ...(issues !== undefined ? { issues } : {}),
