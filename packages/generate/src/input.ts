@@ -23,7 +23,7 @@
  */
 
 import { buildWorkspace, qualify, type Decl } from "@sevenk/core";
-import type { Layout, Request } from "./provider.js";
+import type { Layout, Request } from "@sevenk/provider";
 import type { Options } from "./rules.js";
 
 /** The model as it travels: the files themselves. */

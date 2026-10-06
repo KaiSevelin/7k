@@ -19,26 +19,9 @@
  * it is why an option is a choice between correct outputs, never a way to buy one by giving up another.
  */
 
-import type { Options } from "./rules.js";
+import type { OptionSpec } from "@sevenk/provider";
 
-export interface OptionSpec {
-  /** As written in a manifest: `messageType`. */
-  readonly name: string;
-  /** One line, for `--help`. */
-  readonly describe: string;
-  readonly type: "string" | "boolean" | "number" | "enum";
-  /** The permitted values, for `enum`. */
-  readonly of?: readonly string[];
-  readonly default?: unknown;
-  /**
-   * Where it may be set.
-   *
-   * `entry` is a decision about the whole output — a namespace, a target framework — and letting a rule
-   * vary it per declaration would produce something that does not compile. `declaration` may be
-   * overridden by a rule, which is what "adjust when needed" means in practice.
-   */
-  readonly scope: "entry" | "declaration";
-}
+import type { Options } from "./rules.js";
 
 export interface OptionProblem {
   readonly at: string;

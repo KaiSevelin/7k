@@ -1,9 +1,9 @@
 /**
  * What a provider is.
  *
- * A provider turns the IR into files for one target — C#, Bicep, JSON Schema. D48 puts implementations
- * outside the language, so this file is not a specification of *how* anything is generated. It is the
- * shape of the hand-over, and the two promises either side makes.
+ * A provider turns the IR into files for one target — C#, Bicep, SQL Server, TypeScript. D48 puts
+ * implementations outside the language, so this file is not a specification of *how* anything is
+ * generated. It is the shape of the hand-over, and the two promises either side makes.
  *
  * **The provider's promise is D48's: it may fail, never weaken.** A provider that cannot honour a
  * declaration refuses it. It never emits something quieter than what the model says — a pipe declared
@@ -23,9 +23,10 @@ import type { NameTable } from "./names.js";
 /**
  * A file a provider wants written.
  *
- * `path` is relative to the entry's output directory, with forward slashes. The run owns where that
- * directory is; a provider never learns an absolute path, which is what keeps output relocatable and a
- * golden-file test honest.
+ * `path` is relative to the entry's output directory, with forward slashes. The host owns where that
+ * directory is — and whether there is one at all, since Spider shows artifacts without writing any. A
+ * provider never learns an absolute path, which is what keeps output relocatable, a golden-file test
+ * honest, and a provider incapable of touching a disk.
  */
 export interface Artifact {
   readonly path: string;
@@ -87,13 +88,19 @@ export interface Generated {
  *
  * The same shape for every target, which is the point: a C# provider and a Bicep provider differ in
  * what they read and what they write, never in how they are called.
+ *
+ * **It is also the entire contact surface.** A provider is handed a model, some names and some options,
+ * and returns text. It is given no filesystem, no manifest, no run and no reader — so a provider cannot
+ * write a file, cannot know whether it is the CLI or Spider calling it, and cannot behave differently
+ * depending on which. That is not a restriction a provider is asked to respect; it is the only thing it
+ * can see.
  */
 export interface Request {
   /**
    * The whole model, always.
    *
    * Not the selection. A provider resolves references into packages that are not being emitted, because
-   * a model that did not resolve would not have checked, and the run refuses before calling anybody.
+   * a model that did not resolve would not have checked, and the host refuses before calling anybody.
    */
   readonly model: LinkedModel;
   /** The declarations this entry asked to emit, in declaration order. */
@@ -115,7 +122,8 @@ export interface Request {
    * The options resolved for one declaration, after its matching rules.
    *
    * Separate from `options` because a rule may say more about `pipe:shop.payments.commands` than about
-   * pipes generally, and the provider should not have to re-run the matcher to find out.
+   * pipes generally, and the provider should not have to re-run the matcher to find out — which it
+   * could not anyway, since it is never shown the rules.
    */
   optionsFor(decl: Decl): Readonly<Record<string, unknown>>;
 }
@@ -125,7 +133,7 @@ export interface Request {
  *
  * Declared rather than assumed, because single-file validity is language-specific: a C# provider can
  * concatenate into one file and a Bicep provider mostly cannot. A provider lists what it supports and
- * refuses the rest, instead of the run concatenating text it does not understand.
+ * refuses the rest, instead of the host concatenating text it does not understand.
  */
 export type Layout = "per-declaration" | "per-package" | "single";
 

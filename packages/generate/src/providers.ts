@@ -12,7 +12,7 @@
  * a subprocess without being rewritten. That change is not made here; it is kept possible here.
  */
 
-import type { Provider } from "./provider.js";
+import type { Provider } from "@sevenk/provider";
 
 export interface LoadProblem {
   readonly module: string;

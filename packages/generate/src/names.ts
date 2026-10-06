@@ -17,6 +17,7 @@
  */
 
 import type { Decl, LinkedModel } from "@sevenk/core";
+import type { NameTable } from "@sevenk/provider";
 import { matcher, parseSelector, type Selector } from "./selector.js";
 
 export type Style = "kebab" | "snake" | "dot" | "pascal" | "camel" | "as-written";
@@ -35,15 +36,6 @@ export interface NameRule {
    * only evidence is a line in a diff. Only meaningful on a selector naming one declaration.
    */
   readonly name?: string;
-}
-
-export interface NameTable {
-  /** The physical name of a declaration. Every declaration has one, selected or not. */
-  of(decl: Decl): string;
-  /** By qualified name, for a provider resolving a reference it was handed rather than a declaration. */
-  byQualified(qname: string): string | undefined;
-  /** Every assignment, sorted — the published form, so two runs can be diffed. */
-  all(): readonly { readonly qualified: string; readonly physical: string }[];
 }
 
 const qualifiedName = (decl: Decl): string =>

@@ -15,7 +15,7 @@
  */
 
 import type { NameRule } from "./names.js";
-import type { Layout } from "./provider.js";
+import type { Layout } from "@sevenk/provider";
 import type { Rule } from "./rules.js";
 
 export interface Entry {

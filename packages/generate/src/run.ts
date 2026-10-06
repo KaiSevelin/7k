@@ -23,13 +23,12 @@
  */
 
 import type { Decl, LinkedModel } from "@sevenk/core";
-import { buildNames, type NameRule, type NameTable } from "./names.js";
+import { buildNames, type NameRule } from "./names.js";
 import type { Entry, Manifest } from "./manifest.js";
 import { compileRules, type Options } from "./rules.js";
 import { validateOptions, withDefaults } from "./options.js";
 import { matcher, parseSelector } from "./selector.js";
-import type { Artifact, Generated, Provider, Refusal } from "./provider.js";
-import type { Loss } from "./loss.js";
+import type { Artifact, Generated, Loss, NameTable, Provider, Refusal } from "@sevenk/provider";
 
 /** A file the run decided on, with the entry that produced it. */
 export interface Planned {
