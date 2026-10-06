@@ -3358,6 +3358,86 @@ plain typos as well — `totl.currency` was equally silent — which is the bett
 
 ---
 
+## D107 — CQRS stays outside: a read model is expressible and deliberately unchecked
+
+7K gains no `view` declaration, no `reads` clause and no `stale within` guarantee. A read model is
+modelled as what it is — a service that reacts to events and answers a `@query` — and the language says
+nothing further about it. API Composition and Command-side replica are declined on the same grounds.
+
+**Why:** the question arrived from the pattern catalogue this language was provoked by, where CQRS,
+Command-side replica and API Composition all point at the same observation: a 7K model describes
+message flow completely and reads barely at all. `@query` exists as an intent (D100) but a *view* — the
+thing fed by events and then asked questions — has no name here, so a model of a CQRS system is silent
+about the half where the reading happens.
+
+The observation is correct and the conclusion drawn from it was wrong, which is what this decision
+records.
+
+**A read model is already expressible.** A service that reacts to events and answers a query needs
+nothing that does not exist. It is declared, drawn, traced, mocked and simulated like any other service.
+So the gap was never expressiveness; it was that nothing *checked* the arrangement.
+
+**The proposed clause failed section 2.0's test, and failed it in the way the section warns about.**
+`reads SeatsReserved, SeatsReleased` would say which events a query is answered from — and nothing can
+enforce it. Codegen owns the wire, not the handler body, so no implementation can verify that an answer
+is computed from the stored projection of those events rather than from somewhere else entirely.
+Somebody feeds a third event into the view on Tuesday, does not update the clause, and the model is
+fiction. That is 2.0's datastore argument with the nouns changed:
+
+> A declaration that a service uses a particular datastore is enforced by nothing — someone adds a
+> second one on Tuesday and the model becomes fiction. **Unenforceable declarations rot, and a model
+> people have learned not to trust is worse than no model.**
+
+The counter-argument offered for `reads` was that it names *messages*, which are already in the model
+and already on the wire, unlike a datastore. That is true and it is not the test. The test is whether an
+implementation can be made to honour the claim, and a list of provenance is a statement about how a
+handler computes, which is exactly the half 2.0 puts outside.
+
+**`stale within` failed differently, and worse.** As a declared guarantee it would bind every provider
+under D48 — may fail, never weaken. No provider can make a view fresh: freshness is a function of broker
+lag and consumer health, neither of which a generator controls. A generated watermark check that refused
+a stale answer would not be failing, it would be weakening, since a refused answer is not an answer. So
+the clause would be either unenforceable or universally refused, and "declare it and watch four
+providers refuse" is not a feature. It is also the only guarantee ever proposed for this language that
+no implementation could satisfy, which is a strong signal on its own.
+
+**What is given up, stated plainly**, because a decision that only lists its benefits is not one:
+
+- `read-your-own-write` — a saga step that sends a command and a later step that queries a view fed by
+  what that command emits. This is the signature CQRS defect and nothing else finds it from a
+  description. It is a real loss.
+- `reads-unconsumed` — a query claiming to read from a message its service never consumes. Dies with
+  the clause it checked.
+- `view-over-lossy-pipe` — a read model fed by an `at-most-once` pipe diverging permanently. On
+  inspection this one was weak: *every* consumer of a lossy pipe may have incomplete state, which is
+  what `at-most-once` already declares. A second name for it would have added a check and no
+  information.
+
+**What remains, which is more than it sounds.** `@query` keeps its four diagnostics, including the one
+that matters most — a read modelled as a command is silently deduplicated, and the trace says
+`deduplicated`, which looks like the system working (D100). And the arrangement stays available in its
+honest form: a view written as *its own* service, reacting to events and answering queries and doing
+nothing else. For a service of that shape every subscription necessarily feeds the answer, because it
+has no other purpose, so the link `reads` would have declared becomes a consequence of the topology
+instead of a claim about internals. That makes `read-your-own-write` recoverable later from the IR as it
+already stands, with no new syntax — and it is the move section 2.6 already prefers, where making a
+boundary visible means turning it into something the model can see rather than something it is told:
+**the honest architecture is the easier one to express.**
+
+Not built now, because no model has that shape yet. The Strangler was worth doing because a check was
+already giving wrong advice about a real model (D105); this would be a check waiting for a model to
+exist. Revisit when one does.
+
+**The boundary this settles.** A rule was proposed to stop `reads` from becoming `indexed by` and then
+`rebuild from`: that a clause may only mention things the model already contains. It is not needed, and
+adopting it would have been the mistake — it is precisely the rule that admits `reads`. The stop was
+already written, in 2.0, and it is enforceability. The same rule declines API Composition, whose
+substance is how one service assembles an answer from three others, and Command-side replica, whose
+substance is where a copy of data lives. Neither is observable at a boundary, so neither can be
+enforced, so neither is 7K's business.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -3372,6 +3452,7 @@ One remains. All others are resolved — see the decisions named.
 | Was | Resolved by |
 |---|---|
 | Upcasts declared and never applied | D88 — applied on receipt, chained, with a scenario pinning the version |
+| CQRS, read models, API Composition | D107 — declined. Expressible already; the clause that would check it is unenforceable |
 | Invariants declared and never checked | D89 — evaluated on receipt, per record and per element |
 | Projections specified and unimplemented | D90 — JSON Schema 2020-12 in `packages/project`, written by `7k project` |
 | `map` in messages | D91 — kept, and understood as an unversioned extension point |

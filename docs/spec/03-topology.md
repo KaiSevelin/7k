@@ -202,7 +202,12 @@ A service belongs to the package of its file, and its identity is `(kind, packag
 
 A service is fully described by what it consumes, what it produces, and the guarantees on both. Its
 database, its calls to third-party APIs, its internal domain model, its configuration, its health
-checks and its business logic are all outside the model.
+checks, any read model it maintains and its business logic are all outside the model.
+
+That a service answers a query *from* the events it consumes is therefore not something 7K says
+(D107). A read model is written as what it is — a service reacting to events and answering a `@query` —
+and the provenance of its answer is the handler's business, because nothing could hold it to a claim
+about that.
 
 The test is enforceability. Codegen owns the wire, so a `once per` key is enforced and
 `requires claim.tid == envelope.tenantId` is enforced. A declaration that a service uses a particular
