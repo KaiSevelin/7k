@@ -281,6 +281,13 @@ export interface ReactIr {
 export interface ServiceIr extends DeclBase {
   readonly kind: "service";
   readonly external: boolean;
+  /**
+   * `@adapter`: this service exists to translate a foreign vocabulary into the domain's own.
+   *
+   * An Anti-corruption Layer. The annotation is not decoration — it is what lets the checker insist
+   * that the foreign types stop here, which is the only thing the pattern actually asks for.
+   */
+  readonly adapter: boolean;
   readonly emits: readonly EmitIr[];
   readonly reacts: readonly ReactIr[];
 }

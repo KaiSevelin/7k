@@ -11,6 +11,7 @@
  *   package-cycle      a dependency cycle only visible once edges are aggregated
  *   tier-violation     a lower tier learning an upper tier's vocabulary
  *   internal-leak      a package-private message consumed from outside
+ *   adapter-leak       a foreign type carried inward past the adapter meant to stop it
  *   envelope-break     a hop that cannot carry a context its inbound messages do
  *   orphan-message     emitted and never consumed, or the reverse
  *
@@ -34,6 +35,7 @@ import { analyzeVersions } from "./analyze-versions.js";
 import { analyzeWiring } from "./analyze-wiring.js";
 import type { LinkedModel } from "./link.js";
 import {
+  flatFields,
   isAncestorPackage,
   qualify,
   symbolKey,
@@ -43,6 +45,7 @@ import {
   type PipeIr,
   type Ref,
   type ServiceIr,
+  type TypeIr,
 } from "./model.js";
 
 const servicesOf = (m: LinkedModel): ServiceIr[] =>
@@ -55,6 +58,7 @@ export function analyze(model: LinkedModel): Diagnostic[] {
   return [
     ...packageDependencies(model),
     ...internalLeaks(model),
+    ...adapterLeaks(model),
     ...envelopeBreaks(model),
     ...orphanMessages(model),
     ...replyWithoutEmit(model),
@@ -220,6 +224,143 @@ function internalLeaks(model: LinkedModel): Diagnostic[] {
       for (const sent of r.issues ?? []) check(sent, s.id.pkg);
     }
   }
+  return out;
+}
+
+
+/**
+ * A foreign type carried inward, past the adapter that exists to stop it.
+ *
+ * An **Anti-corruption Layer** is a service that translates somebody else's vocabulary into the
+ * domain's own. 7K needed no new construct for it — `02-contract.md` 5.4 already says that a
+ * translation needing computation "is a translating service, which belongs in the Topology layer", and
+ * `@external` already models the system on the far side. What was missing is the part that makes the
+ * pattern worth anything: an adapter only protects a domain if the foreign types genuinely stop there,
+ * and until now nothing checked that they did.
+ *
+ * `@adapter` is therefore a claim with teeth. The foreign packages are **derived**, not declared —
+ * they are the packages of the messages this service reacts to, other than its own — so there is no
+ * second place for the truth to live and nothing to keep in step by hand. Every message the adapter
+ * sends onward is then walked, transitively through records, lists and maps, and a type declared in a
+ * foreign package is an error.
+ *
+ * This passes 2.0's enforceability test, which is why it belongs in the language at all. It is about
+ * what crosses a boundary rather than what happens inside a service; the import graph and the
+ * generated types are artifacts somebody generates, so a leak is a compile error rather than a note in
+ * a review; and it rests on the package being the ownership boundary, which 7K already enforces. No
+ * new declaration kind, and nothing that could rot into fiction.
+ */
+function adapterLeaks(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  const MAX_DEPTH = 32;
+
+  /** The packages a type reaches, transitively. A cycle contributes what is known rather than hanging. */
+  const packagesOf = (type: TypeIr, seen: Set<string>, depth: number): Set<string> => {
+    if (depth > MAX_DEPTH) return new Set();
+    switch (type.t) {
+      case "ref": {
+        const target = model.declFor(type.ref);
+        if (target === undefined) return new Set();
+        const key = symbolKey(target.id.pkg, target.id.name);
+        if (seen.has(key)) return new Set();
+        seen.add(key);
+        const found = new Set<string>([target.id.pkg]);
+        if (target.kind === "record" || target.kind === "envelope" || target.kind === "message") {
+          for (const field of flatFields((r) => model.declFor(r), target)) {
+            for (const pkg of packagesOf(field.type, seen, depth + 1)) found.add(pkg);
+          }
+        }
+        return found;
+      }
+      case "list":
+        return packagesOf(type.item, seen, depth + 1);
+      case "map":
+        return new Set([
+          ...packagesOf(type.key, seen, depth + 1),
+          ...packagesOf(type.value, seen, depth + 1),
+        ]);
+      default:
+        return new Set();
+    }
+  };
+
+  /** Which foreign packages a message carries, and the field that carries each. */
+  const carried = (message: MessageIr, foreign: ReadonlySet<string>): Map<string, string> => {
+    const hits = new Map<string, string>();
+    for (const field of flatFields((r) => model.declFor(r), message)) {
+      for (const pkg of packagesOf(field.type, new Set(), 0)) {
+        if (foreign.has(pkg) && !hits.has(pkg)) hits.set(pkg, field.name);
+      }
+    }
+    return hits;
+  };
+
+  for (const service of servicesOf(model)) {
+    if (!service.adapter) continue;
+
+    const foreign = new Set<string>();
+    for (const react of service.reacts) {
+      const target = model.declFor(react.message);
+      if (target !== undefined && target.id.pkg !== service.id.pkg) foreign.add(target.id.pkg);
+    }
+
+    // An adapter that reads nothing foreign translates nothing, and an annotation that claims
+    // something it does not do is exactly the kind of declaration 2.0 refuses to admit.
+    if (foreign.size === 0) {
+      out.push({
+        code: "adapter-translates-nothing",
+        severity: "warning",
+        message:
+          `\`${service.id.name}\` is an \`@adapter\` but reacts to nothing outside ` +
+          `\`${service.id.pkg}\`, so there is no foreign vocabulary for it to stop`,
+        span: service.span,
+      });
+      continue;
+    }
+
+    /**
+     * Everything it sends onward: what it publishes, what it answers with, what it instructs.
+     *
+     * By message rather than by clause, because one message is usually named twice — `issues` says
+     * what instructs it and `emits` says where it goes — and one leak reported twice is how a check
+     * teaches people to skim it. The first mention carries the span.
+     */
+    const outbound = new Map<string, Ref>();
+    const note = (ref: Ref): void => {
+      const target = model.declFor(ref);
+      if (target === undefined) return;
+      const key = symbolKey(target.id.pkg, target.id.name);
+      if (!outbound.has(key)) outbound.set(key, ref);
+    };
+    for (const emit of service.emits) note(emit.message);
+    for (const react of service.reacts) {
+      for (const reply of react.replies ?? []) if (reply !== "none") note(reply);
+      for (const issued of react.issues ?? []) note(issued);
+    }
+
+    for (const ref of outbound.values()) {
+      const message = model.declFor(ref);
+      if (message?.kind !== "message") continue;
+
+      // A wholly foreign message is the adapter answering the far side in the far side's own
+      // language, which is its job. The leak is a *domain* message carrying a foreign type inside
+      // it, because that is the one the domain then has to understand.
+      if (foreign.has(message.id.pkg)) continue;
+
+      for (const [pkg, via] of carried(message, foreign)) {
+        out.push({
+          code: "adapter-leaks-foreign-type",
+          severity: "error",
+          message:
+            `\`${service.id.name}\` is an \`@adapter\` for \`${pkg}\`, so that vocabulary stops ` +
+            `here — but \`${qualify(message.id)}\` carries it inward through ${via}`,
+          span: ref.span,
+        });
+      }
+    }
+  }
+
   return out;
 }
 

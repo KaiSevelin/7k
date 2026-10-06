@@ -348,7 +348,8 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
   const labels = annotations.filter(
     (a) =>
       ![
-        "command", "event", "query", "internal", "external", "since", "deprecated", "role", "derive",
+        "command", "event", "query", "internal", "external", "adapter", "since", "deprecated", "role",
+        "derive",
       ].includes(a),
   );
   const base = {
@@ -472,6 +473,7 @@ function lowerDecl(ctx: Ctx, n: CstNode): Decl | undefined {
         kind: "service",
         id: id("service"),
         external: annotations.includes("external"),
+        adapter: annotations.includes("adapter"),
         emits,
         reacts,
       };

@@ -159,7 +159,7 @@ Language annotation names are **reserved**, because labels and language annotati
 namespace and a `label` must not collide with one:
 
 ```
-@since  @deprecated  @derive  @role  @internal  @external  @command  @event
+@since  @deprecated  @derive  @role  @internal  @external  @adapter  @command  @event  @query
 ```
 
 ## The Contract layer

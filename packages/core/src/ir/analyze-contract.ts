@@ -15,6 +15,7 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { LinkedModel } from "./link.js";
 import type { Operand, Predicate } from "./predicate.js";
+import { coverageOf, overlapOf, showWitness } from "./partition.js";
 import {
   isAncestorPackage,
   qualify,
@@ -34,6 +35,7 @@ export function analyzeContract(model: LinkedModel): Diagnostic[] {
     ...subscriptionNames(model),
     ...filterScopes(model),
     ...filtersOnQueues(model),
+    ...filtersOverlap(model),
     ...internalScopes(model),
     ...carriedMessages(model),
     ...valueNarrowing(model),
@@ -182,9 +184,19 @@ function filterScopes(model: LinkedModel): Diagnostic[] {
  * thrown it away (`03-topology.md` section 2.5).
  *
  * The specification says to warn "unless the filters across that queue's subscriptions are
- * exhaustive", and exhaustiveness over arbitrary predicates is not decidable. The decidable
- * approximation: a queue is safe for a message when **some** subscription to it has no filter
- * at all, because that one catches whatever the others decline. Anything else warns.
+ * exhaustive", and this now checks exactly that. `partition.ts` answers it by evaluating the real
+ * predicates over candidate messages, so a queue is quiet when some subscription has no filter at
+ * all, or when the filters are shown to cover every candidate between them.
+ *
+ * **The point of being exact is that a deliberate split stops being a warning.** A legacy service and
+ * its replacement dividing one pipe by a predicate — the Strangler Application — is the ordinary way
+ * to migrate, and the old approximation told them to add an unfiltered subscription, which is the one
+ * thing that would break the split. When coverage cannot be decided the warning stands, so nothing
+ * that used to be reported goes quiet without being proven safe.
+ *
+ * And when there *is* a gap, the diagnostic now names the message that falls through it, which is
+ * usually the one nobody pictured: a comparison with an absent operand is false, so `region == "EU"`
+ * and `region != "EU"` leave a message with no `region` to nobody.
  */
 function filtersOnQueues(model: LinkedModel): Diagnostic[] {
   const out: Diagnostic[] = [];
@@ -192,7 +204,12 @@ function filtersOnQueues(model: LinkedModel): Diagnostic[] {
   interface Group {
     readonly pipe: PipeIr;
     readonly message: string;
-    filtered: { readonly service: ServiceIr; readonly name: string; readonly span: Diagnostic["span"] }[];
+    filtered: {
+      readonly service: ServiceIr;
+      readonly name: string;
+      readonly where: Predicate;
+      readonly span: Diagnostic["span"];
+    }[];
     unfiltered: number;
   }
 
@@ -214,21 +231,103 @@ function filtersOnQueues(model: LinkedModel): Diagnostic[] {
       }
 
       if (react.where === undefined) group.unfiltered++;
-      else group.filtered.push({ service, name: react.subscription, span: react.span });
+      else group.filtered.push({ service, name: react.subscription, where: react.where, span: react.span });
     }
   }
 
   for (const group of groups.values()) {
     if (group.unfiltered > 0) continue;
+
+    const coverage = coverageOf(group.filtered.map((f) => f.where));
+    if (coverage.k === "total") continue;
+
+    // A gap names the message that falls through it; an undecidable space falls back to what this
+    // check has always said, because going quiet without a proof is how a model stops being trusted.
+    const because =
+      coverage.k === "gap"
+        ? `nothing handles it when ${showWitness(coverage.witness)}`
+        : "no subscription there takes it unfiltered";
+
     for (const { name, span } of group.filtered) {
       out.push({
         code: "filter-on-queue",
         severity: "warning",
         message:
-          `\`${name}\` filters \`${group.message}\` on \`${qualify(group.pipe.id)}\`, a queue, and no ` +
-          "subscription there takes it unfiltered — a message every filter declines is consumed and gone",
+          `\`${name}\` filters \`${group.message}\` on \`${qualify(group.pipe.id)}\`, a queue, and ` +
+          `${because} — a message every filter declines is consumed and gone`,
         span,
       });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Two subscriptions on one queue that both accept the same message.
+ *
+ * A queue is competing consumers and each message is handled once (`03-topology.md` 1.1), so when two
+ * filters both accept a message, which handler runs is not determined by anything in the model. That is
+ * worse than it sounds during a migration, which is where overlapping filters actually arise: a request
+ * is served by the legacy service or its replacement depending on which one got there first, so the
+ * cutover has no moment and a bug reproduces on one request in three.
+ *
+ * An error rather than a warning, for the same reason `subscription-collision` is one: it is not a
+ * tuning choice that someone might have meant. Reported once per pair, against the later subscription,
+ * with the message that both would take.
+ */
+function filtersOverlap(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  interface Sub {
+    readonly service: string;
+    readonly name: string;
+    readonly where: Predicate;
+    readonly span: Diagnostic["span"];
+  }
+  const groups = new Map<string, { readonly pipe: PipeIr; readonly message: string; subs: Sub[] }>();
+
+  for (const service of servicesOf(model)) {
+    for (const react of service.reacts) {
+      if (react.where === undefined) continue;
+      const pipe = model.declFor(react.pipe);
+      if (pipe?.kind !== "pipe" || pipe.pipeKind !== "queue") continue;
+
+      const target = model.resolve(react.message);
+      const message = target === undefined ? react.message.text : qualify(target);
+      const key = `${qualify(pipe.id)}\u0000${message}`;
+
+      let group = groups.get(key);
+      if (group === undefined) {
+        group = { pipe, message, subs: [] };
+        groups.set(key, group);
+      }
+      group.subs.push({
+        service: service.id.name,
+        name: react.subscription,
+        where: react.where,
+        span: react.span,
+      });
+    }
+  }
+
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.subs.length; i++) {
+      for (let j = i + 1; j < group.subs.length; j++) {
+        const a = group.subs[i]!;
+        const b = group.subs[j]!;
+        const overlap = overlapOf(a.where, b.where);
+        if (overlap.k !== "overlap") continue;
+        out.push({
+          code: "filters-overlap",
+          severity: "error",
+          message:
+            `\`${b.name}\` and \`${a.name}\` both accept \`${group.message}\` on ` +
+            `\`${qualify(group.pipe.id)}\` when ${showWitness(overlap.witness)}; a queue hands it to one ` +
+            "of them and the model does not say which",
+          span: b.span,
+        });
+      }
     }
   }
 

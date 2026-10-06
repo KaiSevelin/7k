@@ -3193,6 +3193,107 @@ remove.
 
 ---
 
+## D104 — `@adapter`: the Anti-corruption Layer is a check, not a construct
+
+A service may be annotated `@adapter`. The foreign packages are derived — the packages of the messages
+it reacts to, other than its own — and every message it sends onward is walked transitively for types
+declared in one of them. `adapter-leaks-foreign-type` is an error; `adapter-translates-nothing` is a
+warning on an `@adapter` with nothing foreign to translate.
+
+**Why:** the pattern was already expressible and already recommended, and that was the problem. Section
+5.4 of `02-contract.md` draws the line at `upcast` by saying a translation needing computation "is not
+an upcast — it is a translating service, which belongs in the Topology layer", and `@external` already
+models the system on the far side. So a reader following the specification would build the right thing
+and get **nothing for it**: the model could not tell an adapter apart from any other service, and the
+one promise the pattern makes — that the foreign vocabulary stops here — was kept by discipline alone.
+
+Discipline is what section 2.0 says not to rely on. Its test is enforceability, and the leak check
+passes it three ways, which is the same argument publication guarantees passed in D-note form at 2.9:
+
+- **It is interface, not internals.** What a message carries is on the wire. Whether the adapter uses a
+  mapping library or a switch statement is not, and is not asked.
+- **Codegen owns it.** The import graph and the generated types are generated artifacts, so a leak is a
+  compile error in somebody's build rather than a remark in a review.
+- **It rests on a boundary that already exists.** The package is the ownership boundary (section 4), so
+  this adds no new way to draw one — it gives the existing one a second thing to govern.
+
+**Derived rather than declared**, which was the decision that took the longest. `@adapter(from:
+partner.feed)` reads better and was rejected: it is a second place for the truth to live, and the first
+time somebody adds a `reacts` without updating the annotation the check silently narrows. Deriving the
+foreign set from what the service actually reacts to cannot drift, because there is only one statement
+of it.
+
+**A wholly foreign message is not a leak.** An adapter replying `feed.PartnerAck` is answering the far
+side in the far side's own language, which is the job. The leak is a message *of the domain's own*
+carrying a foreign type inside it, because that is the one the domain then has to understand. The rule
+is direction, not vocabulary, and it is one sentence long — which is why it is the rule, after a first
+attempt that compared pipes and needed a paragraph.
+
+**What this deliberately does not do** is forbid the foreign package being imported anywhere else. That
+was the first design, and it is a stronger guarantee than 7K can honestly make: a second adapter is a
+legitimate thing to have, and nothing distinguishes "a second adapter" from "a leak" without asking the
+author. The check as written needs no such judgement.
+
+---
+
+## D105 — Exhaustive filters are decided, not approximated; and overlapping ones are an error
+
+`filter-on-queue` now decides exhaustiveness by evaluating the predicates over candidate messages drawn
+from the literals they mention, plus **absent** and plus one value matching none of them. It warns when
+a gap is found, names the message that falls through, and stays silent when the filters cover every
+candidate. `filters-overlap` is new, and an error: two subscriptions on a queue that both accept one
+message.
+
+**Why:** the old wording admitted the approximation itself — "exhaustiveness over arbitrary predicates
+is not decidable, so the test is whether **some** subscription takes it unfiltered". That is true of
+arbitrary predicates and false of 7K's, which are comparison and boolean combination over a closed set
+of literals, with no arithmetic and no calls. For that fragment the question is finite: the only values
+that can change a predicate's verdict are the ones it mentions, the absence of a value, and one value
+it does not mention.
+
+**The approximation was not merely imprecise, it gave wrong advice.** Two subscriptions dividing one
+queue by a predicate is how a migration runs — the Strangler Application — and the check fired on every
+correct one. The only way to silence it was to add an unfiltered subscription, which is exactly the
+thing that would break the split by taking traffic from both halves. A check whose remedy is the defect
+is worse than no check, which is D83's argument for narrowing `unexplained-emit` applied to a different
+clause.
+
+**So the Strangler needed no language surface at all**, and that is the result worth recording. Two
+subscriptions, complementary filters, `@deprecated` on the one leaving: all three already existed. What
+was missing was exactness in a check, and the pattern fell out of fixing it.
+
+**The finding that justifies the whole exercise** is what the candidate set includes. A comparison with
+an absent operand is false, and that includes `!=`, so:
+
+```
+where envelope.region == "EU"      // one subscription
+where envelope.region != "EU"      // the other
+```
+
+is **not** a partition. A message with no `region` matches neither and is consumed by nobody. Everyone
+writes this pair; nobody pictures that message. `not ... in [...]` holds in the absent case because
+`not` negates the comparison's verdict rather than the value, so the complement form partitions and the
+negation form does not. The checker now says so, with the witness.
+
+**It evaluates rather than reasons.** `partition.ts` builds candidate messages and calls the same
+`evaluate` a runtime calls. A second implementation of what a predicate means would drift from the
+first, and the absent-operand rule is precisely where it would drift — at which point the witness the
+diagnostic prints would be a lie. This is the reason predicates are lowered in Core at all.
+
+**Every answer is a witness or a shrug.** A gap and an overlap are each reported with a concrete message
+demonstrating it. When the space cannot be enumerated — a `contains` over a list, two read operands
+compared to each other, or more candidates than the cap allows — the answer is `unknown` and the check
+says what it has always said. Nothing goes quiet without a proof, so the change cannot hide a defect
+that used to be reported.
+
+**An error for the overlap, not a warning.** A queue is competing consumers and each message is handled
+once (1.1), so two filters both accepting a message means the model does not say which handler runs.
+During a cutover that is a request served by the legacy service or its replacement depending on which
+got there first — a bug that reproduces one time in three. `subscription-collision` is an error for the
+same reason: it is not a choice somebody might have meant.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.

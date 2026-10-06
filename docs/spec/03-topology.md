@@ -420,10 +420,60 @@ Two hazards follow from that invisibility, and both are checked:
   `liveness-over-lossy-pipe` (1.5) and just as invisible from any single file.
 - **A filter on a `queue` discards rather than redirects** (`filter-on-queue`). On a `topic`, filtering
   means "do not deliver to me" and other subscribers still receive their copy. On a `queue` a message is
-  consumed once, so if the only subscription filters it out the message is silently gone. Warned unless the
-  filters across that queue's subscriptions are exhaustive — which over arbitrary predicates is not
-  decidable, so the test is whether **some** subscription to that message takes it unfiltered. One that
-  does catches whatever the others decline.
+  consumed once, so if the only subscription filters it out the message is silently gone. Warned unless
+  the filters across that queue's subscriptions are exhaustive — and exhaustiveness is decided by
+  evaluating the predicates over candidate messages drawn from the literals they mention, plus **absent**
+  and plus one value matching none of them. A queue is therefore quiet when some subscription takes the
+  message unfiltered, *or* when the filters are shown to cover every candidate between them. When the
+  question cannot be decided — a `contains` over a list, two read operands compared to each other — the
+  warning stands, because going quiet without a proof is how a model stops being trusted.
+- **Two filters on a `queue` can both accept one message** (`filters-overlap`). A queue is competing
+  consumers and each message is handled once, so when two subscriptions both accept it, which handler
+  runs is not determined by anything in the model. An error rather than a warning, for the reason
+  `subscription-collision` is one: it is not a choice somebody might have meant.
+
+Both diagnostics name a **witness** — the message that falls through the gap, or the one both filters
+take — because the useful half of either finding is the case nobody pictured.
+
+### 2.5.1 Dividing one queue, and migrating onto it
+
+Two subscriptions splitting one queue by a predicate is how a system is migrated: the service being
+replaced keeps part of the traffic, its replacement takes the rest, and the boundary moves as confidence
+grows. This is the pattern usually called a *Strangler Application*, and 7K needs nothing of its own to
+express it — it is two subscriptions, complementary filters, and `@deprecated` on the one on its way out.
+
+```7k
+service LegacyOrders @external @deprecated("migrating to OrderService") {
+  reacts PlaceOrder from commands as legacy {
+    where   not envelope.region in ["EU", "UK"]
+    replies none
+  }
+}
+
+service OrderService {
+  reacts PlaceOrder from commands as modern {
+    where   envelope.region in ["EU", "UK"]
+    replies none
+  }
+}
+```
+
+What the language contributes is that both ways of getting this wrong are caught, and that getting it
+*right* is silent. The second part matters as much: an approximation that warned here could only be
+silenced by adding an unfiltered subscription, which is precisely the thing that would break the split.
+
+**Write the complement, not the negation.** The pair above is exhaustive; this pair is not:
+
+```7k
+where envelope.region == "EU"      // one subscription
+where envelope.region != "EU"      // the other
+```
+
+A comparison with an absent operand is **false**, and that includes `!=` — "absent differs from absent"
+is as unfounded as "absent equals absent" (`02-contract.md` section 4). So a message carrying no
+`region` satisfies neither filter and is consumed by nobody. `not ... in [...]` holds in that case and
+`!=` does not, which is why the first form partitions and the second leaves a hole. The checker reports
+it as `filter-on-queue` and names the witness: *nothing handles it when `envelope.region` is absent*.
 
 Distinguish it from `requires`: `where` decides **whether this subscriber cares**, `requires` decides
 **whether the sender was allowed**. A `where` miss is silence; a `requires` failure is a rejection.
@@ -483,6 +533,47 @@ is a generated artifact, not a claim that rots.
 third-party API purely to do its own job stays invisible. That follows from 2.0, and it creates useful
 pressure: to make a boundary visible you must turn it into an adapter that emits a message, at which
 point it is drawn, traced, mocked and simulated. The honest architecture is the easier one to express.
+
+### 2.6.1 Adapters, and where a foreign vocabulary stops
+
+An `@external` service says *this is not ours*. What usually sits next to one is a service whose whole
+purpose is translation: the partner speaks of a `PartnerOrder` with an `iso2` country code, the domain
+speaks of a `PlaceOrder` with its own `Address`, and something has to turn one into the other. This is
+the pattern usually called an *Anti-corruption Layer*.
+
+7K already said that such a service is the answer. `02-contract.md` section 5.4 draws the line at
+`upcast`: a translation needing computation or a lookup "is not an upcast — it is a translating service,
+which belongs in the Topology layer". So the construct was never missing. What was missing is the only
+promise the pattern actually makes — that the foreign vocabulary **stops there**.
+
+```7k
+service PartnerAdapter @adapter {
+  reacts feed.PartnerOrder from inbound {
+    replies none
+    issues  PlaceOrder
+  }
+  emits PlaceOrder to commands
+}
+```
+
+`@adapter` is a claim the checker enforces. The foreign packages are **derived** rather than declared —
+they are the packages of the messages the service reacts to, other than its own — so there is no second
+place for the truth to live and nothing to keep in step by hand. Every message the adapter sends onward
+is then walked, transitively through records, lists and maps:
+
+- **`adapter-leaks-foreign-type`** — a message of the domain's own carries a type declared in a foreign
+  package. An error: this is the boundary not holding, and a boundary that holds sometimes is not one.
+  A *wholly* foreign message is fine, because that is the adapter answering the far side in the far
+  side's own language, which is its job.
+- **`adapter-translates-nothing`** — an `@adapter` that reacts to nothing outside its own package. A
+  warning, because an annotation that claims something it does not do is exactly the kind of declaration
+  section 2.0 refuses to admit.
+
+**Why this belongs in the language**, by the test in 2.0. It is about what crosses a boundary rather than
+what happens inside a service, so it is interface. Codegen owns it: the import graph and the generated
+types are artifacts somebody generates, so a leak is a compile error rather than a note in a review. And
+it rests on the package already being the ownership boundary (section 4), so it adds no new way to draw
+one. No new declaration kind, and nothing that can rot into fiction.
 
 ### 2.7 Simulated responses
 
