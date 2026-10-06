@@ -1,0 +1,13 @@
+{
+  "name": "@sevenk/generate",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@sevenk/core": "*"
+  }
+}

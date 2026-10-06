@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@sevenk/core": "*",
-    "@sevenk/project": "*"
+    "@sevenk/project": "*",
+    "@sevenk/generate": "*"
   }
 }

@@ -31,6 +31,7 @@ import {
   type WorkspaceInput,
 } from "@sevenk/core";
 import { jsonSchema, orderLosses, type Mode } from "@sevenk/project";
+import { generate } from "./generate.js";
 
 const cwd = process.cwd();
 const rel = (p: string): string => relative(cwd, p).replaceAll("\\", "/") || p;
@@ -148,12 +149,16 @@ function project(argv: readonly string[], paths: readonly string[]): number {
 }
 
 const USAGE = `usage:
-  7k check   [paths...]
-  7k project [paths...] --out <dir> [--base <uri>] [--mode tolerant|strict] [--list]
+  7k check    [paths...]
+  7k project  [paths...] --out <dir> [--base <uri>] [--mode tolerant|strict] [--list]
+  7k generate [paths...] [--check] [--draft] [--emit <provider>] [--list] [--providers]
+
+7k generate reads .7k/build.json beside the model. --check writes nothing and exits non-zero
+when the tree differs from what the model implies now, which is the mode for a build.
 `;
 
 /** The flags that take a value, so their value is not mistaken for a path. */
-const VALUED: readonly string[] = ["out", "base", "mode"];
+const VALUED: readonly string[] = ["out", "base", "mode", "manifest", "emit"];
 
 /** `--out dir` and friends. Flags only, since 7K has no configuration file. */
 function flag(argv: readonly string[], name: string): string | undefined {
@@ -180,11 +185,38 @@ function positional(argv: readonly string[]): string[] {
   return out;
 }
 
-function main(argv: readonly string[]): number {
+async function main(argv: readonly string[]): Promise<number> {
   const args = positional(argv);
   const command = args[0] ?? "check";
 
   if (command === "project") return project(argv, args.slice(1));
+  if (command === "generate") {
+    const paths = args.slice(1);
+    const targets = (paths.length === 0 ? ["."] : paths).map((path) => resolve(cwd, path));
+    const found: string[] = [];
+    for (const target of targets) {
+      try {
+        walk(target, found);
+      } catch {
+        process.stderr.write(`7k: cannot read ${rel(target)}\n`);
+        return 2;
+      }
+    }
+    const models = found
+      .filter((f) => f.endsWith(".7k"))
+      .sort()
+      .map((f) => ({ path: rel(f), source: readFileSync(f, "utf8") }));
+    if (models.length === 0) {
+      process.stderr.write("7k: no .7k files found\n");
+      return 2;
+    }
+    return generate(argv, paths, models, {
+      cwd,
+      out: (text) => process.stdout.write(text),
+      err: (text) => process.stderr.write(text),
+      rel,
+    });
+  }
   if (command !== "check") {
     process.stderr.write(`7k: unknown command ${JSON.stringify(command)}\n${USAGE}`);
     return 2;
@@ -270,4 +302,5 @@ function main(argv: readonly string[]): number {
   return errors > 0 ? 1 : 0;
 }
 
-process.exit(main(process.argv.slice(2)));
+// `main` is async because loading a provider is: a provider is a module somebody else published.
+process.exit(await main(process.argv.slice(2)));
