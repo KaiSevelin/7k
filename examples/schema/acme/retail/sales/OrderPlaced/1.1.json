@@ -3,7 +3,7 @@
   "$id": "https://example.invalid/7k/acme/retail/sales/OrderPlaced/1.1.json",
   "title": "acme.retail.sales.OrderPlaced v1.1",
   "description": "The canonical JSON `body` of acme.retail.sales.OrderPlaced, projected from 7K.",
-  "$comment": "This schema is not equivalent validation. 7K's checker is authoritative, and the\nfollowing declared constraints are weaker here or absent entirely:\n\n  Address.city — normalize: not expressed. `normalize trim collapseSpace` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Address.country — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Address.postCode — normalize: not expressed. `normalize strip \" \" upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Address.region — normalize: not expressed. `normalize trim collapseSpace` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Address.street — normalize: not expressed. `normalize trim collapseSpace` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Money.amount — range: not expressed. `range 0..` cannot be expressed over a string, which is how a decimal encodes so that it never round-trips through a double\n  Money.currency — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  OrderPlaced — invariant: not expressed. `total.currency == seats.[].price.currency` relates fields, which this schema does not check\n  OrderPlaced — nominal value: not expressed. 8 value types across 11 fields collapse to their base here (CountryCode, CurrencyCode, EventRef, Line60, OrderRef, PostCode, SeatRef, UserRef), so a payload validates with the right shape in the wrong field\n  OrderPlaced.note — normalize: not expressed. `normalize trim collapseSpace` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  SeatPrice.seat — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it",
+  "$comment": "This schema is not equivalent validation. 7K's checker is authoritative, and the\nfollowing declared constraints are weaker here or absent entirely:\n\n  Address.city — normalize: not expressed. `normalize trim collapseSpace` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Address.country — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Address.postCode — normalize: not expressed. `normalize strip \" \" upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Address.region — normalize: not expressed. `normalize trim collapseSpace` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Address.street — normalize: not expressed. `normalize trim collapseSpace` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  Money.amount — range: not expressed. `range 0..` cannot be expressed over a string, which is how a decimal encodes so that it never round-trips through a double\n  Money.currency — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  OrderPlaced — invariant: not expressed. `total.currency == seats.[].price.currency` relates fields, which this schema does not check\n  OrderPlaced — nominal value: not expressed. 8 value types across 11 fields collapse to their base here (CountryCode, CurrencyCode, EventRef, Line60, OrderRef, PostCode, SeatRef, UserRef), so a payload validates with the right shape in the wrong field\n  OrderPlaced.note — normalize: not expressed. `normalize trim collapseSpace` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it\n  SeatPrice.number — normalize: not expressed. `normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it",
   "x-7k": {
     "source": "7K",
     "target": "JSON Schema 2020-12",
@@ -44,7 +44,7 @@
       },
       {
         "construct": "normalize",
-        "at": "SeatPrice.seat",
+        "at": "SeatPrice.number",
         "fidelity": "none",
         "detail": "`normalize upper` is a transformation and JSON Schema is a predicate language, so an unnormalized value validates here and 7K would have rewritten it"
       },
@@ -187,7 +187,7 @@
           "minLength": 1,
           "maxLength": 32
         },
-        "seat": {
+        "number": {
           "type": "string",
           "examples": [
             "A12"
@@ -201,7 +201,7 @@
       },
       "required": [
         "event",
-        "seat",
+        "number",
         "price"
       ],
       "additionalProperties": false

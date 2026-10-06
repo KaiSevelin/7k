@@ -1,0 +1,35 @@
+{
+  "out": "generated",
+  "providers": [
+    "@sevenk/csharp",
+    "@sevenk/sqlserver",
+    "@sevenk/bicep",
+    "@sevenk/node"
+  ],
+  "emit": [
+    {
+      "provider": "csharp",
+      "out": "csharp",
+      "layout": "per-declaration",
+      "options": {
+        "namespace": "Acme"
+      }
+    },
+    {
+      "provider": "sqlserver",
+      "out": "sql",
+      "layout": "per-package",
+      "options": {}
+    },
+    {
+      "provider": "bicep",
+      "out": "azure",
+      "layout": "per-package"
+    },
+    {
+      "provider": "node",
+      "out": "ts",
+      "layout": "per-package"
+    }
+  ]
+}

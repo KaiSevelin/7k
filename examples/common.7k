@@ -56,9 +56,11 @@ record Buyer @pii {
   billing: Address
 }
 
+// `number` rather than `seat`: a field named as the record that holds it is legal here and illegal in
+// several target languages, so the C# provider refuses it rather than renaming it behind your back.
 record Seat {
-  event: EventRef
-  seat:  SeatRef
+  event:  EventRef
+  number: SeatRef
 }
 
 record SeatPrice {

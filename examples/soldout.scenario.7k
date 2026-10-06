@@ -45,7 +45,7 @@ scenario SeatsSoldOut {
   at 0s publish ticketing.ReserveSeats as OrderService {
     orderId:       "ORD-10432",
     reservationId: "$auto",
-    seats:         { $repeat: 6, of: { event: "EV-1", seat: "$auto" } }
+    seats:         { $repeat: 6, of: { event: "EV-1", number: "$auto" } }
   }
 
   advance 1s
@@ -244,7 +244,7 @@ scenario OldOrderPlacedUpcasts {
     // The currency is written rather than generated, on both sides: OrderPlaced's
     // `invariant total.currency == seats[].price.currency` relates two fields, and
     // independent generation cannot honour a relation it knows nothing about.
-    seats:   { $repeat: 2, of: { event: "EV-9", seat: "$auto",
+    seats:   { $repeat: 2, of: { event: "EV-9", number: "$auto",
                                  price: { amount: "120.0000", currency: "SEK" } } },
     total:   { amount: "240.0000", currency: "SEK" }
   }
