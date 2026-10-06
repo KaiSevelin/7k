@@ -291,11 +291,15 @@ reactAttr    = "accepts"     versionRange
              | "where"       predicate
              | "requires"    predicate
              | "replies"     replySpec
+             | "issues"      issueSpec
+                                       (* commands sent onward while handling;
+                                          a list, not an outcome space *)
              | "concurrency" ( intLit | "by" path )
              | "retry"       retrySpec ;
 retrySpec    = intLit [ "after" durLit ] [ "linear" ] [ "max" durLit ] ;
 replySpec    = replyAlt { "|" replyAlt } ;
 replyAlt     = qname | "none" ;
+issueSpec    = qname { "," qname } ;
 
 msgRef       = qname [ version ] ;
 ```

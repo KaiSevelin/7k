@@ -264,6 +264,14 @@ export interface ReactIr {
   readonly requires?: Predicate;
   /** Absent means the clause was omitted, which is `incomplete` (D30). */
   readonly replies?: readonly (Ref | "none")[];
+  /**
+   * Commands this handler sends onward while doing its work (D103).
+   *
+   * Not an outcome: nobody awaits these, which is exactly what separates them from `replies`. They
+   * exist so the model can say what instructs a command that is issued mid-handling — the shape
+   * `replies` cannot express, because putting one there would make every sender wait for it.
+   */
+  readonly issues?: readonly Ref[];
   readonly concurrency?: string;
   /** Absent means `RETRY_DEFAULT`. */
   readonly retry?: RetryIr;

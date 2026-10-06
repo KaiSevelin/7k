@@ -271,8 +271,8 @@ function unclaimedRoles(model: LinkedModel): Diagnostic[] {
 /**
  * A **command** a service sends that nothing in the model accounts for.
  *
- * Three things explain it: one of the service's own subscriptions declares it as a `reply`,
- * a saga sends it, or a schedule does. A command none of those explain is an instruction to
+ * Four things explain it: one of the service's own subscriptions declares it as a `reply` or
+ * `issues` it onward (D103), a saga sends it, or a schedule does. A command none of those explain is an instruction to
  * somebody else that the model cannot say what prompted.
  *
  * Deliberately commands only. An `@event` is a statement of fact about the emitter's own
@@ -317,6 +317,13 @@ function unexplainedEmits(model: LinkedModel): Diagnostic[] {
         const id = model.resolve(reply);
         if (id !== undefined) replied.add(symbolKey(id.pkg, id.name));
       }
+      // A command the handler sends onward while working is instructed by this subscription, which is
+      // exactly what `issues` exists to say (D103). Per service, like `replies`: the explanation has to
+      // come from the thing doing the emitting, not from somewhere else in the model.
+      for (const sent of react.issues ?? []) {
+        const id = model.resolve(sent);
+        if (id !== undefined) replied.add(symbolKey(id.pkg, id.name));
+      }
     }
 
     for (const emit of service.emits) {
@@ -334,8 +341,8 @@ function unexplainedEmits(model: LinkedModel): Diagnostic[] {
         severity: "warning",
         message:
           `\`${service.id.name}\` emits the \`@command\` \`${emit.message.text}\`, but no ` +
-          "`replies`, saga or schedule says what makes it do so — so the model cannot say what " +
-          "instructs this",
+          "`replies`, `issues`, saga or schedule says what makes it do so — so the " +
+          "model cannot say what instructs this",
         span: emit.span,
       });
     }

@@ -58,6 +58,7 @@ export function analyze(model: LinkedModel): Diagnostic[] {
     ...envelopeBreaks(model),
     ...orphanMessages(model),
     ...replyWithoutEmit(model),
+    ...issuesMisused(model),
     ...dedupeKeys(model),
     ...analyzeContract(model),
     ...analyzeWiring(model),
@@ -216,6 +217,7 @@ function internalLeaks(model: LinkedModel): Diagnostic[] {
     for (const r of s.reacts) {
       check(r.message, s.id.pkg);
       for (const rep of r.replies ?? []) if (rep !== "none") check(rep, s.id.pkg);
+      for (const sent of r.issues ?? []) check(sent, s.id.pkg);
     }
   }
   return out;
@@ -320,6 +322,56 @@ function orphanMessages(model: LinkedModel): Diagnostic[] {
 }
 
 // ---- outcome space ---------------------------------------------------------
+/**
+ * `issues` names commands, and each needs a matching `emits` on the same service.
+ *
+ * The emit half mirrors `reply-without-emit` and for the same reason: `emits` is where the pipe is
+ * declared, so a message named here and emitted nowhere has no route. The command half is the clause's
+ * whole point — `issues` says what instructs an instruction (D103), and a fact about the handler's own
+ * work is not one. An `@event` named here would be a category error that silences nothing, because
+ * `unexplained-emit` never looked at events in the first place (D83).
+ */
+function issuesMisused(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  for (const s of servicesOf(model)) {
+    const emitted = new Set<string>();
+    for (const e of s.emits) {
+      const id = model.resolve(e.message);
+      emitted.add(id === undefined ? e.message.text.toLowerCase() : symbolKey(id.pkg, id.name));
+    }
+    for (const r of s.reacts) {
+      for (const sent of r.issues ?? []) {
+        const id = model.resolve(sent);
+        const key = id === undefined ? sent.text.toLowerCase() : symbolKey(id.pkg, id.name);
+        if (!emitted.has(key)) {
+          out.push({
+            code: "issue-without-emit",
+            severity: "error",
+            message:
+              `\`${s.id.name}\` issues \`${sent.text}\` but does not emit it, ` +
+              "so there is no pipe for it to go to",
+            span: sent.span,
+          });
+          continue;
+        }
+        const decl = model.declFor(sent);
+        // An unspecified intent is `incomplete` and reported elsewhere; nothing to conclude here.
+        if (decl?.kind !== "message" || decl.intent === undefined) continue;
+        if (decl.intent === "command") continue;
+        out.push({
+          code: "issues-not-a-command",
+          severity: "warning",
+          message:
+            `\`${s.id.name}\` issues \`${sent.text}\`, which is an \`@${decl.intent}\` and not a ` +
+            "`@command` — `issues` says what instructs an instruction, and nothing instructs a fact",
+          span: sent.span,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 
 /**
  * Every message in `replies` needs a matching `emits` on the same service, which

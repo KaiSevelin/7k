@@ -599,6 +599,16 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
           return out;
         })();
 
+  const issuesClause = cl.get("issues")?.[0];
+  const issues =
+    issuesClause === undefined
+      ? undefined
+      : childNodes(issuesClause, "IssueSpec")[0]?.children.flatMap((child) => {
+          if (isToken(child)) return [];
+          const r = ref(ctx, child);
+          return r === undefined ? [] : [r];
+        }) ?? [];
+
   const oncePer = cl.get("once")?.[0];
   const concurrency = cl.get("concurrency")?.[0];
   const retry = retryOf(cl.get("retry")?.[0]);
@@ -625,6 +635,7 @@ function lowerReact(ctx: Ctx, n: CstNode, serviceName: string): ReactIr {
       ? { requires: lowerPredicate(childNodes(requiresClause, "Predicate")[0], ctx.file) }
       : {}),
     ...(replies !== undefined ? { replies } : {}),
+    ...(issues !== undefined ? { issues } : {}),
     ...(concurrency !== undefined ? { concurrency: clauseText(concurrency) } : {}),
     ...(retry === undefined ? {} : { retry }),
     span,

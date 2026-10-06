@@ -46,6 +46,7 @@ export type NodeKind =
   | "Clause"
   | "RetrySpec"
   | "ReplySpec"
+  | "IssueSpec"
   // process
   | "SagaDecl"
   | "StartStmt"

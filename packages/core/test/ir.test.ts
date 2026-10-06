@@ -285,6 +285,55 @@ describe("reply-without-emit", () => {
   });
 });
 
+describe("issues", () => {
+  const model = (clause: string): Workspace =>
+    ws([
+      "a.7k",
+      "package p\npipe c : queue\n" +
+        "message Go v1.0 @command {\n  k: uuid @role(businessKey)\n}\n" +
+        "message On v1.0 @command {\n  k: uuid @role(businessKey)\n}\n" +
+        "message Fact v1.0 @event {\n  k: uuid @role(businessKey)\n}\n" +
+        `service S {\n${clause}  reacts Go from c {\n    replies none\n    issues On\n  }\n}\n`,
+    ]);
+
+  it("rejects a command issued but not emitted, since it has no pipe to go to", () => {
+    // The same rule as `reply-without-emit` and for the same reason: `emits` is where the pipe is.
+    expect(codes(model(""))).toContain("issue-without-emit");
+  });
+
+  it("accepts one that is emitted", () => {
+    expect(codes(model("  emits On to c\n"))).not.toContain("issue-without-emit");
+  });
+
+  it("warns when what is issued is not a command", () => {
+    // `issues` says what instructs an instruction, and by D83 nothing instructs a fact about a
+    // service's own work — so an event named here is a category error rather than a shorthand.
+    const w = ws([
+      "a.7k",
+      "package p\npipe c : queue\n" +
+        "message Go v1.0 @command {\n  k: uuid @role(businessKey)\n}\n" +
+        "message Fact v1.0 @event {\n  k: uuid @role(businessKey)\n}\n" +
+        "service S {\n  emits Fact to c\n  reacts Go from c {\n    replies none\n    issues Fact\n  }\n}\n",
+    ]);
+    expect(codes(w)).toContain("issues-not-a-command");
+  });
+
+  it("carries several, because a handler may instruct more than one thing", () => {
+    const w = ws([
+      "a.7k",
+      "package p\npipe c : queue\n" +
+        "message Go v1.0 @command {\n  k: uuid @role(businessKey)\n}\n" +
+        "message On v1.0 @command {\n  k: uuid @role(businessKey)\n}\n" +
+        "message Off v1.0 @command {\n  k: uuid @role(businessKey)\n}\n" +
+        "service S {\n  emits On to c\n  emits Off to c\n" +
+        "  reacts Go from c {\n    replies none\n    issues On, Off\n  }\n}\n",
+    ]);
+    expect(codes(w)).not.toContain("issue-without-emit");
+    const service = w.model.decls.find((d) => d.kind === "service");
+    expect(service?.kind === "service" ? service.reacts[0]?.issues?.length : undefined).toBe(2);
+  });
+});
+
 describe("missing-dedupe-key", () => {
   const model = (clause: string): Workspace =>
     ws([

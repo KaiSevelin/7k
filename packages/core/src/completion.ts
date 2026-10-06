@@ -89,6 +89,7 @@ const REACT_ATTRS = items(
   ["where", "subscription filter over the envelope only"],
   ["requires", "authorization predicate over claim, envelope, message"],
   ["replies", "the handler's outcome space: A | B, or none"],
+  ["issues", "commands this handler sends onward while working: A, B"],
   ["concurrency", "1, a number, or by <path>"],
   ["retry", "attempts for a handler failure: retry 5 after 2s"],
 );

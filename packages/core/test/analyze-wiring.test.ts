@@ -232,6 +232,26 @@ service Watcher {
     expect(codes(withSchedule)).not.toContain("unexplained-emit");
   });
 
+  it("is satisfied by the handler declaring it as `issues`", () => {
+    // The shape D103 exists for: a handler that does its work by instructing somebody else. The
+    // subscription says so, and nothing is waiting for the answer.
+    const withIssues = MODEL.replace(
+      "service Watcher {",
+      "service Extra {\n  emits Nudge to commands\n\n  reacts Did from events { replies none\n    issues Nudge }\n}\n\nservice Watcher {\n  reacts Nudge from commands { replies none }",
+    );
+    expect(codes(withIssues)).not.toContain("unexplained-emit");
+  });
+
+  it("is not satisfied by another service issuing it", () => {
+    // The explanation has to come from the service doing the emitting. A sibling that issues the same
+    // command says nothing about why *this* one sends it.
+    const elsewhere = MODEL.replace(
+      "service Watcher {",
+      "service Extra {\n  emits Nudge to commands\n\n  reacts Did from events { replies none }\n}\n\nservice Other {\n  emits Nudge to commands\n\n  reacts Did from events as other { replies none\n    issues Nudge }\n}\n\nservice Watcher {\n  reacts Nudge from commands { replies none }",
+    );
+    expect(codes(elsewhere)).toContain("unexplained-emit");
+  });
+
   it("skips an `@external` service, whose behaviour 7K does not describe", () => {
     // `Caller` emits `Do` and declares no replies; it is external, so nothing is expected.
     expect(codes(MODEL)).not.toContain("unexplained-emit");

@@ -3139,6 +3139,60 @@ building the first real consumer of something the specification had claimed.
 
 ---
 
+## D103 — `issues`: what a handler sends onward, which `replies` could never say
+
+A `reacts` block may name commands the handler sends onward while working:
+
+```
+reacts NotifyRecipient from commands {
+  replies none
+  issues  SendSms
+}
+```
+
+`unexplained-emit` accepts an `issues` as an explanation, alongside `replies`, a saga and a schedule.
+
+**Why:** the example model raised two warnings that could not be fixed. `CompartmentService` emits
+`lockers.OpenDoor` and `NotifyService` emits `SendSms`, and in both the warning was right — something
+decides to issue the command, and the model could not say what. It could not say it with any clause
+that existed:
+
+- **`replies` is the wrong shape, and the checker proves it.** Writing `replies SendSms` turns the
+  warning into `unhandled-outcome` on the saga step that sent `NotifyRecipient`: "sends
+  `notify.NotifyRecipient` but handles no `SendSms`, so it waits for its timeout when that comes back".
+  `replies` is a *closed outcome space the sender awaits* (2.1), so anything in it becomes everyone's
+  problem. That is not a technicality — it is the clause working as designed.
+- **A saga step would move the decision.** `SendSms` would then be sent by the delivery saga, and
+  `notify.7k` already records why that is wrong: a delivery saga that learned the phone number would
+  spread personal data into a package that has none.
+- **A schedule does not apply.** Nothing here is timed.
+
+So the gap was in the language, not in the model, and the warning's own words — "the model cannot say
+what instructs this" — were true of 7K rather than of the example.
+
+**The deciding argument is D83's.** That decision narrowed `unexplained-emit` to commands precisely
+because "three unactionable warnings out of seven is how a checker teaches people to ignore it, and a
+warning nobody reads is worse than one that was never written". Both remaining warnings were
+unactionable by construction. Narrowing the check again would have been the other way out, but it
+would have given up the finding D83 kept the check *for* — `OrderService` sending
+`ticketing.ReserveSeats` with no saga — because that service reacts to things too. Adding the clause
+keeps the check's teeth and gives the warning somewhere to go.
+
+**Why a list and not an outcome space.** `replies A | B` is exactly one of A or B; `issues A, B` is all
+of them. The separator carries the difference, so neither clause needs a word of prose to say which it
+is. Nobody awaits an `issues`, so `unhandled-outcome` never looks at it.
+
+**Two guards.** `issue-without-emit` mirrors `reply-without-emit`: `emits` is where the pipe is
+declared, so a message issued and emitted nowhere has no route. `issues-not-a-command` is the clause's
+own point restated — it says what instructs an instruction, and by D83 nothing instructs a fact about a
+service's own work.
+
+**Absent is not `incomplete`.** Unlike `replies`, omitting `issues` is silent. Most handlers issue
+nothing, and a clause that nagged for the common case would be the noise this decision set out to
+remove.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.

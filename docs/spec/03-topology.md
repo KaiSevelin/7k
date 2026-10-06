@@ -182,6 +182,7 @@ service TicketService {
 | `where <predicate>` | none | subscription filter; see 2.5 |
 | `requires <predicate>` | none | authorization; see section 3 |
 | `replies A \| B` | unspecified (`incomplete`) | the handler's outcome space; see 2.1 |
+| `issues A, B` | none | commands this handler sends onward while working. Not an outcome: nobody awaits them; see 2.1.1 |
 | `concurrency` | the pipe's ordering key; unconstrained if unordered | see 2.2 |
 | `retry` | 3 retries (4 attempts), 1s base, exponential | see 2.3 |
 
@@ -248,6 +249,42 @@ It earns its place three times:
 
 Omitting it is deliberately `incomplete` rather than an error: a half-drawn model must parse (D20),
 but an unspecified outcome space silently weakens the liveness analysis, so it should be visible.
+
+### 2.1.1 Commands sent onward
+
+`replies` is what the sender awaits. `issues` is what the handler sets in motion and nobody waits for.
+
+```
+service NotifyService {
+  emits SendSms to commands
+
+  reacts NotifyRecipient from commands {
+    replies none
+    issues  SendSms
+  }
+}
+```
+
+A handler that does its work by instructing somebody else is ordinary — a compartment is released and
+its door must open, a recipient is notified and a text must go out. The command is plainly instructed by
+the subscription, but `replies` cannot say so: it is a *closed outcome space*, so a command placed there
+becomes something every sender must handle, and `unhandled-outcome` correctly reports a saga step that
+does not. The two clauses answer different questions, which is why there are two.
+
+| | `replies` | `issues` |
+|---|---|---|
+| Who waits for it | the sender | nobody |
+| How many | exactly one of the listed | all of the listed |
+| Separator | `\|`, an exclusive choice | `,`, a list |
+| Checked by | `unhandled-outcome` | `unexplained-emit` |
+
+Like `replies`, every message named must have a matching `emits` on the same service
+(`issue-without-emit`), because that is where its pipe is declared. Unlike `replies`, each must be a
+`@command` (`issues-not-a-command`): the clause exists to say what instructs an instruction, and nothing
+instructs a fact about a service's own work (D83).
+
+Omitting it is not `incomplete`. Most handlers issue nothing, and an absent clause says exactly that —
+which is what lets `unexplained-emit` keep its teeth (D103).
 
 ### 2.2 Concurrency
 

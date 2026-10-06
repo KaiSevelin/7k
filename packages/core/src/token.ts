@@ -82,7 +82,7 @@ export const KEYWORD_ROLES: ReadonlyMap<string, KeywordRole> = new Map(
       ["clause", [
         "envelopes", "tier", "include", "invariant",
         "delivery", "durable", "ordering", "retention", "maxsize", "dlq", "carries",
-        "emits", "reacts", "accepts", "once", "per", "where", "requires", "replies",
+        "emits", "reacts", "accepts", "once", "per", "where", "requires", "replies", "issues",
         "concurrency", "retry",
         "start", "keyed", "send", "timeout", "deadline", "undo",
         "on", "every", "onmissed",

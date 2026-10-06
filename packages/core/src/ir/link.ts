@@ -198,6 +198,7 @@ export function link(input: LinkInput): LinkResult {
           collect(r.message, from, "a message");
           collect(r.pipe, from, "a pipe");
           for (const rep of r.replies ?? []) if (rep !== "none") collect(rep, from, "a message");
+          for (const sent of r.issues ?? []) collect(sent, from, "a message");
         }
         break;
       case "saga":

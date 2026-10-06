@@ -247,6 +247,16 @@ const REACT_ATTRS: ClauseTable = {
     }
     parts.push(node("ReplySpec", alts));
   },
+  issues: (c, parts) => {
+    // A list and not alternatives, unlike `replies`: a handler may issue all of these, where it
+    // replies with exactly one. The separator says which it is without a word of prose.
+    const sent: CstChild[] = [qname(c)];
+    while (c.atPunct(",")) {
+      sent.push(c.advance());
+      sent.push(qname(c));
+    }
+    parts.push(node("IssueSpec", sent));
+  },
   concurrency: byPath,
   retry: (c, parts) => {
     const spec: CstChild[] = [c.eatKind("int") ?? c.missing("an attempt count")];

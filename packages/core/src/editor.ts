@@ -226,6 +226,7 @@ export function editorCompletions(
       case "reacts":
       case "send":
       case "replies":
+      case "issues":
       case "carries":
       case "publish":
       case "upcast":
