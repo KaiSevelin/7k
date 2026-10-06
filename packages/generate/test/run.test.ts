@@ -8,10 +8,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildWorkspace, type Decl, type LinkedModel } from "@sevenk/core";
+import { buildWorkspace, qualify, type Decl, type DeclKind, type LinkedModel } from "@sevenk/core";
 import {
   compileRules,
   explain,
+  isProvider,
   parseManifest,
   parseSelector,
   plan,
@@ -99,19 +100,27 @@ function spy(
     readonly refuse?: readonly string[];
     readonly specs?: readonly OptionSpec[];
     readonly layouts?: readonly ("per-declaration" | "per-package" | "single")[];
+    /** What it claims to emit for. Narrower than what it does, to test that the claim is checked. */
+    readonly emits?: readonly DeclKind[];
   } = {},
 ): Provider & { seen?: Request } {
   const provider: Provider & { seen?: Request } = {
     name: options.name ?? "spy",
     target: "a test",
     layouts: options.layouts ?? ["per-declaration", "single"],
+    emits: options.emits ?? ["message", "pipe", "service", "saga", "record", "value", "enum"],
     options: options.specs ?? [],
     generate(request): Generated {
       provider.seen = request;
       const refuse = new Set(options.refuse ?? []);
       const artifacts = request.selected
         .filter((d) => !refuse.has(d.id.name))
-        .map((d) => ({ path: `${d.id.name}.txt`, content: request.names.of(d), losses: [] }));
+        .map((d) => ({
+          path: `${d.id.name}.txt`,
+          content: request.names.of(d),
+          from: [qualify(d.id)],
+          losses: [],
+        }));
       const refusals = request.selected
         .filter((d) => refuse.has(d.id.name))
         .map((d) => ({
@@ -315,6 +324,54 @@ describe("a run", () => {
     expect(result.ok).toBe(false);
     expect(result.problems[0]?.problem).toContain("does not support layout `per-package`");
     expect(result.files).toEqual([]);
+  });
+
+  /**
+   * `emits` is a claim about the provider's own behaviour, and a host greys choices on the strength
+   * of it. So it is checked against what came back rather than believed: a provider that says it only
+   * does messages and hands over a file made from a pipe is reported.
+   */
+  it("reports a provider that emitted from a kind it said it does not emit for", () => {
+    const result = run(manifest({ only: "pipe:*" }), [spy({ emits: ["message"] })]);
+    expect(result.ok).toBe(false);
+    expect(result.problems[0]?.problem).toContain("declares it emits for message");
+    expect(result.problems[0]?.problem).toContain("produced a file from the `pipe`");
+  });
+
+  it("counts the rest rather than repeating itself once per file", () => {
+    const result = run(manifest({ only: "pipe:*" }), [spy({ emits: ["message"] })]);
+    // One problem for the kind, naming one declaration and how many others.
+    expect(result.problems).toHaveLength(1);
+    expect(result.problems[0]?.problem).toMatch(/and \d+ more/);
+  });
+
+  it("says nothing when the provider emitted only from kinds it declared", () => {
+    const result = run(manifest({ only: "pipe:*" }), [spy({ emits: ["pipe"] })]);
+    expect(result.problems).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  /** A project file or an index belongs to no declaration, so it cannot be outside anything. */
+  it("exempts an artifact that names no declaration", () => {
+    const wide: Provider = {
+      name: "spy",
+      target: "a test",
+      layouts: ["single"],
+      emits: ["message"],
+      options: [],
+      generate: (): Generated => ({
+        artifacts: [{ path: "index.txt", content: "a registry", losses: [] }],
+        refusals: [],
+      }),
+    };
+    const result = run(manifest({ only: "pipe:*", layout: "single" }), [wide]);
+    expect(result.problems).toEqual([]);
+  });
+
+  it("is not a provider at all without the kinds it emits for", () => {
+    const { emits: _emits, ...rest } = spy();
+    expect(isProvider(rest)).toBe(false);
+    expect(isProvider(spy())).toBe(true);
   });
 
   it("catches two entries writing the same path", () => {

@@ -15,7 +15,7 @@
  * packages nobody asked to emit.
  */
 
-import type { Decl, LinkedModel } from "@sevenk/core";
+import type { Decl, DeclKind, LinkedModel } from "@sevenk/core";
 import type { Loss } from "./loss.js";
 import type { OptionSpec } from "./options.js";
 import type { NameTable } from "./names.js";
@@ -144,6 +144,28 @@ export interface Provider {
   readonly target: string;
   /** The layouts this provider can actually produce. */
   readonly layouts: readonly Layout[];
+  /**
+   * The declaration kinds this provider emits for.
+   *
+   * Declared for the same reason `layouts` is, and it is the same sentence with one word changed: a
+   * provider lists what it can do with, instead of a host finding out by asking it to and seeing what
+   * comes back. Without it the only way to learn that a Bicep provider has nothing to say about a
+   * message is to generate and count the files, which costs a whole run and happens after whoever
+   * asked has already asked.
+   *
+   * It is what lets a tool offer the right thing: Spider greys the providers that would produce
+   * nothing for what you have selected, rather than listing four and leaving three of them silent.
+   *
+   * **A claim, and a checked one.** Every artifact carries the declarations it came `from`, so a
+   * provider that declares `["pipe"]` and then emits a file from a message is reported by the run
+   * (`provider-emitted-outside-kinds`) rather than quietly believed. That is the difference between
+   * this and a declaration that would rot: an unenforceable claim about a provider's own behaviour
+   * has no business in a contract, and this one is answerable by what the provider hands back.
+   *
+   * Kinds a provider reaches *through* count: C# emits a type for a `record` a selected message
+   * holds, so `record` is one of its kinds even though nobody selects a record on its own.
+   */
+  readonly emits: readonly DeclKind[];
   /**
    * What this provider lets you adjust.
    *

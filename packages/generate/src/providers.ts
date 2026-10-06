@@ -29,6 +29,8 @@ export function isProvider(value: unknown): value is Provider {
     typeof p.target === "string" &&
     Array.isArray(p.layouts) &&
     p.layouts.length > 0 &&
+    Array.isArray(p.emits) &&
+    p.emits.length > 0 &&
     Array.isArray(p.options) &&
     typeof p.generate === "function"
   );

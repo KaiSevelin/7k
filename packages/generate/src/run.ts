@@ -22,7 +22,7 @@
  * a `#error`, a throwing stub — so partial output cannot be mistaken for finished output.
  */
 
-import type { Decl, LinkedModel } from "@sevenk/core";
+import { qualify, type Decl, type LinkedModel } from "@sevenk/core";
 import { buildNames, type NameRule } from "./names.js";
 import type { Entry, Manifest } from "./manifest.js";
 import { compileRules, type Options } from "./rules.js";
@@ -72,6 +72,46 @@ export interface RunOptions {
   readonly providers: ReadonlyMap<string, Provider>;
   /** Write what can be written, with gaps carried in the artifacts. Never makes a run succeed. */
   readonly draft?: boolean;
+}
+
+/**
+ * Artifacts a provider made from a kind it said it does not emit for.
+ *
+ * Read from `from`, which is the provenance only a provider can supply, so this costs a lookup per
+ * declaration named and nothing else. An artifact with no `from` is exempt by design: a project file
+ * or an index is derived from the model as a whole and belongs to no declaration.
+ *
+ * A name that resolves to nothing is somebody else's problem — `unresolved-reference` is the model's
+ * own diagnostic and this is not the place to repeat it.
+ */
+function outsideKinds(
+  provider: Provider,
+  artifacts: readonly Artifact[],
+  model: LinkedModel,
+  at: string,
+): Problem[] {
+  const allowed = new Set(provider.emits);
+  const byName = new Map<string, Decl>();
+  for (const decl of model.decls) byName.set(qualify(decl.id), decl);
+
+  const strayed = new Map<string, Set<string>>();
+  for (const artifact of artifacts) {
+    for (const name of artifact.from ?? []) {
+      const decl = byName.get(name);
+      if (decl === undefined || allowed.has(decl.kind)) continue;
+      const kinds = strayed.get(decl.kind) ?? new Set<string>();
+      kinds.add(name);
+      strayed.set(decl.kind, kinds);
+    }
+  }
+
+  return [...strayed].map(([kind, names]) => ({
+    at,
+    problem:
+      `declares it emits for ${[...allowed].sort().join(", ")}, but produced a file from the ` +
+      `\`${kind}\` \`${[...names].sort()[0]!}\`` +
+      (names.size > 1 ? ` and ${names.size - 1} more` : ""),
+  }));
 }
 
 const join = (a: string, b: string): string =>
@@ -151,6 +191,12 @@ export function plan(model: LinkedModel, manifest: Manifest, options: RunOptions
       });
       continue;
     }
+
+    // `emits` is a claim about the provider's own behaviour, and this is what keeps it one that can
+    // be wrong out loud. A provider declaring `["pipe"]` and handing back a file made from a message
+    // is reported rather than believed — which is the whole reason the kind list is allowed to exist:
+    // a host greys choices on the strength of it, and an unchecked claim would grey the wrong ones.
+    for (const p of outsideKinds(provider, produced.artifacts, model, at)) problems.push(p);
 
     for (const artifact of produced.artifacts) {
       files.push({

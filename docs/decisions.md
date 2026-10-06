@@ -3438,6 +3438,65 @@ enforced, so neither is 7K's business.
 
 ---
 
+## D108 — A provider declares the kinds it emits for, and the run checks it
+
+`Provider` gains `emits: readonly DeclKind[]`. A host may ask what a provider would do with a
+selection instead of asking it to do it, and the run reports a provider that produced a file from a
+kind it did not declare.
+
+**Why:** more than half of Spider's generate menu did nothing. Right-click a pipe and `generate
+csharp` was offered; it produces nothing, because a pipe is infrastructure and C# is not where it is
+configured. Right-click a message and `generate bicep` was offered, to the same effect. Measured over
+the example model, of the twenty combinations of four providers and five selectable kinds, **thirteen
+produced nothing** — and the only way to find out which was to click.
+
+The first attempt at this was to grey nothing and say so afterwards, on the grounds that only a
+provider knows what it emits and the host must not reason about a target. The second half of that is
+right and the conclusion did not follow: a host that *asks* is not a host that reasons. What had to be
+refused was the host inferring it.
+
+**`layouts` is the precedent, and it is the same sentence with one word changed.** A provider already
+lists the layouts it can produce so that the run refuses an impossible one rather than concatenating
+text it does not understand (`provider.ts`). Which declaration kinds it has anything to say about is
+that, on a different axis. Nothing new was invented here; something that should have been there from
+the start was missing.
+
+**Declared rather than asked per declaration**, which was the real decision. A predicate —
+`emitsFor(decl, options)` — is exact, and can even honour an option that turns a whole kind off, which
+a static list cannot. It was declined because it is a second implementation of what `generate` already
+decides, and nothing could check that the two agree. A provider whose predicate said yes and whose
+`generate` produced nothing would grey the wrong rows and be correct by its own lights. The static
+list is coarser and answerable.
+
+**Answerable is the whole argument, and D107 is why.** That decision refused a `reads` clause for read
+models on exactly this ground: a claim about behaviour that nothing can enforce rots, and section 2.0
+would rather have no declaration than one people have learned not to trust. `emits` passes where
+`reads` failed, and for a concrete reason — every artifact already carries the declarations it came
+`from`, so the run resolves each one and reports a kind outside the declaration. The claim is checked
+by the artifacts the provider itself hands back.
+
+The other direction — a kind declared and never honoured — is not checkable at runtime, since nothing
+can distinguish "emits nothing for this one" from "emits nothing for any of them". That is a test's
+job, and `7k-spider/test/demo-providers.test.ts` does it both ways over every selectable kind for all
+four providers.
+
+**What the four declare**, which is the layer each one covers and nothing more:
+
+| Provider | `emits` |
+|---|---|
+| `bicep` | `pipe` — the Topology layer. A pipe is the one declaration that *is* infrastructure |
+| `sqlserver` | `message`, `record` — the Data layer, with values and enums reached through them |
+| `csharp`, `node` | `enum`, `value`, `record`, `envelope`, `message`, `saga`, `service` — all three layers, never `pipe` |
+
+Nothing emits for a `schedule`, so every row greys on one. That is accurate rather than an oversight:
+a schedule is a reason a message is sent, and no target has yet been asked to generate the sending.
+
+**A kind reached counts.** C# emits a type for a `record` a selected message holds, so `record` is one
+of its kinds even though no selector names a record on its own. `emits` answers "could anything come
+of this", not "is this the thing I dispatch on".
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
