@@ -12,13 +12,22 @@
  * `mutate/index.ts`.
  */
 
-import { childNodes, childTokens, isToken, keywordOf, tokens, type CstNode } from "../cst.js";
+import {
+  childNodes,
+  childTokens,
+  descendants,
+  isToken,
+  keywordOf,
+  tokens,
+  type CstNode,
+} from "../cst.js";
 import type { Diagnostic, Span } from "../diagnostics.js";
 import {
   qualify,
   symbolKey,
   type Decl,
   type NodeId,
+  type Ref,
   type SagaIr,
   type ServiceIr,
   type Terminal,
@@ -814,6 +823,199 @@ function stepInsertion(saga: SagaIr, source: string): number {
   return lineStart < 0 ? closing : lineStart + 1;
 }
 
+
+// ---- removing declarations --------------------------------------------------
+
+/**
+ * The span a whole declaration occupies in its file, comment and trailing blank line included.
+ *
+ * The declaration's own span is not enough. Removing only that leaves the indentation that led up to
+ * it, the doc comment that explained it — now explaining whatever follows, which is worse than a
+ * stranded comment — and two blank lines where there was one. So: up through the comment lines
+ * immediately above (the same walk `aboveItsComment` does for an insertion), and down through the
+ * blank lines immediately below, which keeps exactly one blank line between the neighbours that are
+ * left.
+ */
+function spanOfWhole(source: string, decl: Decl): { start: number; end: number } {
+  const lineStart = source.lastIndexOf("\n", decl.span.start) + 1;
+  const start = aboveItsComment(source, lineStart);
+
+  let end = source.indexOf("\n", decl.span.end - 1);
+  end = end < 0 ? source.length : end + 1;
+  for (;;) {
+    const next = source.indexOf("\n", end);
+    const line = source.slice(end, next < 0 ? source.length : next);
+    if (line.trim() !== "") break;
+    if (next < 0) {
+      end = source.length;
+      break;
+    }
+    end = next + 1;
+  }
+  return { start, end };
+}
+
+/** Every scenario step that names this service, as `file: scenario`. */
+function scenariosNaming(editable: Editable, service: ServiceIr): string[] {
+  const out: string[] = [];
+  for (const tree of scenarioTreesOf(editable)) {
+    for (const decl of childNodes(tree.root)) {
+      if (decl.kind !== "ScenarioDecl" && decl.kind !== "SoakDecl") continue;
+      const name = declaredName(decl, "scenario", "soak");
+      const body = childNodes(decl, "Body")[0];
+      if (name === undefined || body === undefined) continue;
+      // `publish M as S` and `expect S handled M` are the two forms that name one.
+      const names = [...descendants(body)]
+        .filter((n) => n.kind === "PublishStmt" || n.kind === "ExpectStmt")
+        .flatMap((n) => childNodes(n, "QName").map(flatText));
+      if (names.some((n) => n === service.id.name || n === qualify(service.id))) {
+        out.push(`${tree.file}: ${name}`);
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * `service X { ... }`, removed.
+ *
+ * **Nothing in the language refers to a service by name**, which is what makes this the one declaration
+ * that can be removed without first taking something apart. A saga's host is *derived* — it is the
+ * service that reacts to the saga's start message (`04-process.md`) — so removing it leaves the saga
+ * without one rather than leaving a dangling reference, and that is said as a warning rather than
+ * refused: the model stays readable and the checker names it.
+ *
+ * **A scenario naming it is a warning too, and deliberately not a refusal.** `publish M as S` does name
+ * a service, so a scenario referring to this one stops resolving — but a scenario file is a sibling
+ * artifact with its own file and its own fix (`30-scenarios.md`), and refusing here would make a
+ * service undeletable because something that is not the model mentions it. Named, so the fix is
+ * findable.
+ */
+export function removeService(editable: Editable, what: { readonly service: string }): Mutation {
+  const op = "removeService";
+  const describe = `remove service ${what.service}`;
+  const { model } = editable;
+
+  const service = findDecl(model, what.service, "service");
+  if (service === undefined || service.kind !== "service") {
+    return refuse(op, describe, [
+      error("no-such-service", `no service \`${what.service}\``, nowhere("")),
+    ]);
+  }
+
+  const source = editable.sources[service.file];
+  if (source === undefined) {
+    return refuse(op, describe, [
+      error("no-file", `\`${service.file}\` was not parsed, so it cannot be edited`, service.span),
+    ]);
+  }
+
+  const diagnostics: Diagnostic[] = [];
+
+  const hosted = model.decls.filter(
+    (d) =>
+      d.kind === "saga" &&
+      d.id.pkg === service.id.pkg &&
+      d.start !== undefined &&
+      service.reacts.some((r) => {
+        const a = model.resolve(r.message);
+        const b = d.start === undefined ? undefined : model.resolve(d.start.message);
+        return a !== undefined && b !== undefined && symbolKey(a.pkg, a.name) === symbolKey(b.pkg, b.name);
+      }),
+  );
+  for (const saga of hosted) {
+    diagnostics.push(
+      warn(
+        "saga-loses-host",
+        `\`${saga.id.name}\` is hosted by \`${service.id.name}\` because it reacts to that saga's ` +
+          "start message, so removing it leaves the saga with nothing to run it",
+        saga.span,
+      ),
+    );
+  }
+
+  const named = scenariosNaming(editable, service);
+  if (named.length > 0) {
+    diagnostics.push(
+      warn(
+        "named-by-scenario",
+        `\`${service.id.name}\` is named by ${named.map((n) => `\`${n}\``).join(", ")}, which will ` +
+          "stop resolving",
+        service.span,
+      ),
+    );
+  }
+
+  const { start, end } = spanOfWhole(source, service);
+  return {
+    op,
+    describe: `remove service ${service.id.name} from ${service.id.pkg}`,
+    edits: [{ file: service.file, start, end, text: "" }],
+    diagnostics,
+  };
+}
+
+/**
+ * `pipe x : queue { ... }`, removed.
+ *
+ * **Refused while anything still emits to it or reacts from it**, with the clauses named. A pipe *is*
+ * referred to by name, so removing one underneath an `emits` leaves an unresolved reference — an error,
+ * in the model's own files, which is the line this module draws: a mutation may cost something and say
+ * so, but it does not leave the model not checking out. The fix is a disconnect, which is one drag or
+ * one menu row away, and saying which clauses is what makes that fix findable.
+ *
+ * Removing the clauses here instead was the alternative and was declined: it turns one local edit into
+ * an edit across every service that touched the pipe, which is a different and much larger promise than
+ * the rest of this module makes. `20-ir.md` keeps that class of thing — `moveToPackage` — separate for
+ * the same reason.
+ */
+export function removePipe(editable: Editable, what: { readonly pipe: string }): Mutation {
+  const op = "removePipe";
+  const describe = `remove pipe ${what.pipe}`;
+  const { model } = editable;
+
+  const pipe = findDecl(model, what.pipe, "pipe");
+  if (pipe === undefined || pipe.kind !== "pipe") {
+    return refuse(op, describe, [error("no-such-pipe", `no pipe \`${what.pipe}\``, nowhere(""))]);
+  }
+
+  const source = editable.sources[pipe.file];
+  if (source === undefined) {
+    return refuse(op, describe, [
+      error("no-file", `\`${pipe.file}\` was not parsed, so it cannot be edited`, pipe.span),
+    ]);
+  }
+
+  const key = symbolKey(pipe.id.pkg, pipe.id.name);
+  const uses: string[] = [];
+  for (const decl of model.decls) {
+    if (decl.kind !== "service") continue;
+    const on = (ref: Ref): boolean => {
+      const id = model.resolve(ref);
+      return id !== undefined && symbolKey(id.pkg, id.name) === key;
+    };
+    for (const emit of decl.emits) if (on(emit.pipe)) uses.push(`\`${decl.id.name}\` emits to it`);
+    for (const react of decl.reacts) if (on(react.pipe)) uses.push(`\`${decl.id.name}\` reacts from it`);
+  }
+
+  if (uses.length > 0) {
+    return refuse(op, describe, [
+      error(
+        "pipe-in-use",
+        `${[...new Set(uses)].join(", ")} — disconnect those first, or the reference is left dangling`,
+        pipe.span,
+      ),
+    ]);
+  }
+
+  const { start, end } = spanOfWhole(source, pipe);
+  return {
+    op,
+    describe: `remove pipe ${pipe.id.name} from ${pipe.id.pkg}`,
+    edits: [{ file: pipe.file, start, end, text: "" }],
+    diagnostics: [],
+  };
+}
 
 // ---- scenarios --------------------------------------------------------------
 

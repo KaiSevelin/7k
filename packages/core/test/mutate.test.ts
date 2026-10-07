@@ -33,6 +33,8 @@ import {
   disconnectReact,
   invert,
   isPossible,
+  removePipe,
+  removeService,
   referenceTo,
   type Editable,
   type Mutation,
@@ -1216,5 +1218,150 @@ describe("where a scenario step lands", () => {
     const fresh = ws.scenarios[0]?.scenarios.find((s) => s.name === "Fresh");
     expect(fresh?.steps.map((s) => s.s)).toEqual(["publish"]);
     expect(fresh?.steps[0]?.s === "publish" && fresh.steps[0].publish.as).toBe("Storefront");
+  });
+});
+
+/**
+ * Removing a declaration.
+ *
+ * The same four properties, plus the one specific to a removal: what is left has to still parse, and it
+ * has to still *read*. A stranded doc comment now explaining whatever follows it is worse than no
+ * comment, and two blank lines where there was one is the whole-file diff section 7.2 promises not to
+ * make.
+ */
+const REMOVABLE = `package shop
+
+message Place v1.0 @command {
+  orderId: uuid @role(businessKey)
+}
+
+pipe inbound : queue {
+  retention 7d
+}
+
+// A pipe nothing emits to or reacts from, so it can go on its own.
+pipe quiet : queue {
+  retention 7d
+}
+
+service Desk {
+  reacts Place from inbound { replies none }
+}
+
+// A service nothing talks to, which is what makes it removable.
+service Spare {
+}
+`;
+
+describe("removing declarations", () => {
+  const where = (source = REMOVABLE): Editable => editable({ "a.7k": source });
+  const applied = (mutation: Mutation, source = REMOVABLE): string => {
+    expect(mutation.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    return check({ "a.7k": source }, mutation)["a.7k"]!;
+  };
+  const errorsIn = (source: string): string[] =>
+    buildWorkspace([{ path: "a.7k", source }])
+      .diagnostics.filter((d) => d.severity === "error")
+      .map((d) => `${d.code}: ${d.message}`);
+
+  it("the fixture itself checks out", () => {
+    expect(errorsIn(REMOVABLE)).toEqual([]);
+  });
+
+  describe("a service", () => {
+    it("takes its doc comment with it, and leaves one blank line", () => {
+      const after = applied(removeService(where(), { service: "Spare" }));
+      expect(after).not.toContain("service Spare");
+      // The comment explained `Spare`; left behind, it would explain whatever came next.
+      expect(after).not.toContain("A service nothing talks to");
+      expect(after).not.toMatch(/\n\n\n/);
+      // And what was around it is untouched.
+      expect(after).toContain("service Desk {");
+      expect(after).toContain("pipe quiet : queue");
+    });
+
+    it("leaves a model that still checks out", () => {
+      expect(errorsIn(applied(removeService(where(), { service: "Spare" })))).toEqual([]);
+    });
+
+    it("says when a saga loses the host it was deriving", () => {
+      // `Desk` reacts to `PlaceOrder`, which is what `Checkout` starts on.
+      const mutation = removeService(editable({ "a.7k": SAGA_MODEL }), { service: "Desk" });
+      const said = mutation.diagnostics.find((d) => d.code === "saga-loses-host");
+      expect(said?.severity).toBe("warning");
+      expect(said?.message).toContain("Checkout");
+      // Said, not refused: a host is derived, so what is left is incomplete rather than dangling.
+      expect(mutation.edits.length).toBe(1);
+    });
+
+    it("says when a scenario names it, rather than refusing", () => {
+      const mutation = removeService(scen(), { service: "Storefront" });
+      const said = mutation.diagnostics.find((d) => d.code === "named-by-scenario");
+      expect(said?.severity).toBe("warning");
+      expect(said?.message).toContain("Baseline");
+      expect(mutation.edits.length).toBe(1);
+    });
+
+    it("refuses one that is not there", () => {
+      const mutation = removeService(where(), { service: "Ghost" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("no-such-service");
+    });
+  });
+
+  describe("a pipe", () => {
+    it("removes one nothing touches", () => {
+      const after = applied(removePipe(where(), { pipe: "quiet" }));
+      expect(after).not.toContain("pipe quiet");
+      expect(after).not.toMatch(/\n\n\n/);
+      expect(errorsIn(after)).toEqual([]);
+    });
+
+    it("refuses one still in use, and names the clauses", () => {
+      const mutation = removePipe(where(), { pipe: "inbound" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("pipe-in-use");
+      expect(mutation.diagnostics[0]?.message).toContain("Desk");
+      expect(mutation.diagnostics[0]?.message).toContain("reacts from it");
+    });
+
+    it("removes one once the clause that used it has gone", () => {
+      // The two compose, which is what makes refusing an answer rather than a dead end.
+      const files = { "a.7k": REMOVABLE };
+      const first = disconnectReact(where(), {
+        service: "Desk",
+        message: "Place",
+        pipe: "inbound",
+      });
+      const between = applyAll(files, first.edits);
+      const second = removePipe(where(between["a.7k"]!), { pipe: "inbound" });
+      expect(second.edits.length).toBe(1);
+      expect(applyAll(between, second.edits)["a.7k"]).not.toContain("pipe inbound");
+    });
+  });
+
+  it("is invertible, like every other operation", () => {
+    check({ "a.7k": REMOVABLE }, removeService(where(), { service: "Spare" }));
+    check({ "a.7k": REMOVABLE }, removePipe(where(), { pipe: "quiet" }));
+  });
+
+  /**
+   * The separator stays with the declaration above, which at the end of a file means one trailing
+   * blank line. Consuming the blank line *before* instead would be wrong everywhere else: in the
+   * middle of a file it joins two declarations that were apart.
+   */
+  it("removes the last declaration in a file leaving the one before it whole", () => {
+    const after = applied(removeService(where(), { service: "Spare" }));
+    expect(after.endsWith("reacts Place from inbound { replies none }\n}\n\n")).toBe(true);
+    expect(after).not.toMatch(/\n\n\n/);
+    expect(errorsIn(after)).toEqual([]);
+
+    // And that is the shape `addService` appends to, so the two round-trip.
+    const back = applyAll(
+      { "a.7k": after },
+      addService(where(after), { pkg: "shop", name: "Spare" }).edits,
+    )["a.7k"]!;
+    expect(back).toContain("service Spare {");
+    expect(back).not.toMatch(/\n\n\n/);
   });
 });

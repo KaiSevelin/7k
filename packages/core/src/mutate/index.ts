@@ -27,6 +27,14 @@
  * The data operations — `addValue`, `addRecord`, `addField`, `setConstraint` — are local in the same way
  * the connecting ones are, and are simply not written yet.
  *
+ * `removeService` and `removePipe` are here and are local in that same way, with one rule between them:
+ * **a mutation may cost something and say so, but it does not leave the model not checking out.**
+ * Nothing in the language refers to a service by name — a saga's host is derived from its `reacts` —
+ * so removing one is a cost to report. A pipe *is* referred to by name, so removing one underneath an
+ * `emits` leaves an unresolved reference, and that is refused with the clauses named. Removing those
+ * clauses here instead was declined: it turns one local edit into an edit across every service that
+ * touched the pipe, which is a larger promise than anything else in this module makes.
+ *
  * ### Scenarios, which are not part of the language and are edited here anyway
  *
  * `addScenario`, `addPublish`, `addExpect` and `addAdvance` write to a scenario file (`30-scenarios.md`,
@@ -58,6 +66,8 @@ export {
   addStep,
   carriersOf,
   emittersOf,
+  removePipe,
+  removeService,
   setDeadline,
   setTerminal,
   setUndo,
