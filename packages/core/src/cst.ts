@@ -172,6 +172,16 @@ export const keywordOf = (n: CstNode): string | undefined =>
  * declaration keyword that is not itself a keyword.
  */
 export function nameOf(n: CstNode): string | undefined {
+  return nameTokenOf(n)?.text;
+}
+
+/**
+ * The same token, for an edit that has to replace it.
+ *
+ * `rename` needs the span and not just the text, and a second scan looking for "the name" would be a
+ * second answer to the question `nameOf` already answers.
+ */
+export function nameTokenOf(n: CstNode): Token | undefined {
   let seenKeyword = false;
   for (const t of childTokens(n)) {
     if (t.kind !== "ident") continue;
@@ -179,7 +189,7 @@ export function nameOf(n: CstNode): string | undefined {
       seenKeyword = true;
       continue;
     }
-    if (seenKeyword) return t.text;
+    if (seenKeyword) return t;
   }
   return undefined;
 }

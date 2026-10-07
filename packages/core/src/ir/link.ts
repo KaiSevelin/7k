@@ -22,6 +22,7 @@ import {
   type PackageIr,
   type Ref,
   type SourceFile,
+  type TypeIr,
 } from "./model.js";
 import type { LoweredFile } from "./lower.js";
 
@@ -36,11 +37,103 @@ export interface LinkResult {
 }
 
 /** A reference and where it lives, so resolution can report precisely. */
-interface Site {
+/**
+ * One place in a model where something is named.
+ *
+ * Exported with `referenceSites` because more than one pass needs the same list: the linker resolves
+ * each site and reports the ones that do not, and `rename` rewrites the ones that resolve to what is
+ * being renamed. Two walks over the IR looking for references would eventually disagree about which
+ * clauses hold one, and the symptom would be a rename that quietly missed a `carries` or an `undo`.
+ */
+export interface Site {
   readonly ref: Ref;
   readonly fromPkg: string;
   /** What the reference is expected to name, for the diagnostic message. */
   readonly expect: string;
+}
+
+/**
+ * Every reference in a model, in no particular order.
+ *
+ * What counts as a reference is "a `Ref` the linker would resolve" — which is deliberately not every
+ * name in the text. A field's own name, a step's own name and a declaration's own name are not
+ * references, and a predicate names fields and enum members rather than declarations, so neither is
+ * reached from here.
+ */
+export function referenceSites(model: {
+  readonly decls: readonly Decl[];
+  readonly packages: ReadonlyMap<string, PackageIr>;
+}): Site[] {
+  const sites: Site[] = [];
+  const collect = (ref: Ref | undefined | null, fromPkg: string, expect: string): void => {
+    if (ref === undefined || ref === null) return;
+    sites.push({ ref, fromPkg, expect });
+  };
+
+  const collectType = (t: TypeIr, from: string): void => {
+    if (t.t === "ref") collect(t.ref, from, "a type");
+    else if (t.t === "list") collectType(t.item, from);
+    else if (t.t === "map") {
+      collectType(t.key, from);
+      collectType(t.value, from);
+    }
+  };
+
+  for (const pkg of model.packages.values()) {
+    for (const e of pkg.envelopes) collect(e, pkg.name, "an envelope");
+    for (const t of pkg.tiers) for (const m of t.members) collect(m, pkg.name, "a package");
+  }
+
+  for (const d of model.decls) {
+    const from = d.id.pkg;
+    switch (d.kind) {
+      case "value":
+        if (d.base.t === "ref") collect(d.base.ref, from, "a value");
+        break;
+      case "record":
+      case "envelope":
+      case "message":
+        for (const inc of d.includes) collect(inc, from, "a record");
+        for (const f of d.fields) collectType(f.type, from);
+        break;
+      case "upcast":
+        collect(d.message, from, "a message");
+        break;
+      case "pipe":
+        collect(d.dlq ?? undefined, from, "a pipe");
+        for (const c of d.carries ?? []) collect(c, from, "a message");
+        break;
+      case "service":
+        for (const e of d.emits) {
+          collect(e.message, from, "a message");
+          collect(e.pipe, from, "a pipe");
+        }
+        for (const r of d.reacts) {
+          collect(r.message, from, "a message");
+          collect(r.pipe, from, "a pipe");
+          for (const rep of r.replies ?? []) if (rep !== "none") collect(rep, from, "a message");
+          for (const sent of r.issues ?? []) collect(sent, from, "a message");
+        }
+        break;
+      case "saga":
+        collect(d.start?.message, from, "a message");
+        for (const f of d.state) collectType(f.type, from);
+        for (const s of d.steps) {
+          collect(s.send?.message, from, "a message");
+          for (const a of s.awaits) collect(a.message, from, "a message");
+          collect(s.undo?.message, from, "a message");
+        }
+        for (const t of d.terminals) collect(t.send.message, from, "a message");
+        break;
+      case "schedule":
+        collect(d.send?.message, from, "a message");
+        break;
+      default:
+        break;
+    }
+  }
+
+  return sites;
 }
 
 export function link(input: LinkInput): LinkResult {
@@ -159,74 +252,7 @@ export function link(input: LinkInput): LinkResult {
     return null;
   };
 
-  const sites: Site[] = [];
-  const collect = (ref: Ref | undefined | null, fromPkg: string, expect: string): void => {
-    if (ref === undefined || ref === null) return;
-    sites.push({ ref, fromPkg, expect });
-  };
-
-  for (const pkg of packages.values()) {
-    for (const e of pkg.envelopes) collect(e, pkg.name, "an envelope");
-    for (const t of pkg.tiers) for (const m of t.members) collect(m, pkg.name, "a package");
-  }
-
-  for (const d of decls) {
-    const from = d.id.pkg;
-    switch (d.kind) {
-      case "value":
-        if (d.base.t === "ref") collect(d.base.ref, from, "a value");
-        break;
-      case "record":
-      case "envelope":
-      case "message":
-        for (const inc of d.includes) collect(inc, from, "a record");
-        for (const f of d.fields) collectType(f.type, from);
-        break;
-      case "upcast":
-        collect(d.message, from, "a message");
-        break;
-      case "pipe":
-        collect(d.dlq ?? undefined, from, "a pipe");
-        for (const c of d.carries ?? []) collect(c, from, "a message");
-        break;
-      case "service":
-        for (const e of d.emits) {
-          collect(e.message, from, "a message");
-          collect(e.pipe, from, "a pipe");
-        }
-        for (const r of d.reacts) {
-          collect(r.message, from, "a message");
-          collect(r.pipe, from, "a pipe");
-          for (const rep of r.replies ?? []) if (rep !== "none") collect(rep, from, "a message");
-          for (const sent of r.issues ?? []) collect(sent, from, "a message");
-        }
-        break;
-      case "saga":
-        collect(d.start?.message, from, "a message");
-        for (const f of d.state) collectType(f.type, from);
-        for (const s of d.steps) {
-          collect(s.send?.message, from, "a message");
-          for (const a of s.awaits) collect(a.message, from, "a message");
-          collect(s.undo?.message, from, "a message");
-        }
-        for (const t of d.terminals) collect(t.send.message, from, "a message");
-        break;
-      case "schedule":
-        collect(d.send?.message, from, "a message");
-        break;
-      default:
-        break;
-    }
-  }
-
-  function collectType(t: import("./model.js").TypeIr, from: string): void {
-    if (t.t === "ref") collect(t.ref, from, "a type");
-    else if (t.t === "list") collectType(t.item, from);
-    else if (t.t === "map") {
-      collectType(t.key, from);
-      collectType(t.value, from);
-    }
-  }
+  const sites = referenceSites({ decls, packages });
 
   // References are frozen objects, so resolution is recorded in a side table and
   // written back through `resolved`, keeping the IR free of mutation.

@@ -18,6 +18,7 @@ import {
   descendants,
   isToken,
   keywordOf,
+  nameTokenOf,
   tokens,
   type CstNode,
 } from "../cst.js";
@@ -32,7 +33,7 @@ import {
   type ServiceIr,
   type Terminal,
 } from "../ir/model.js";
-import type { LinkedModel } from "../ir/link.js";
+import { referenceSites, type LinkedModel } from "../ir/link.js";
 import { trafficOf } from "../ir/labels.js";
 import { parseDuration, writeDuration } from "../literals.js";
 import type { Token } from "../token.js";
@@ -823,6 +824,257 @@ function stepInsertion(saga: SagaIr, source: string): number {
   return lineStart < 0 ? closing : lineStart + 1;
 }
 
+
+// ---- rename -----------------------------------------------------------------
+
+/**
+ * `rename(id, newName)` — the declaration, every reference to it, the scenarios that name it, and the
+ * sidecars that key on it.
+ *
+ * `20-ir.md` section 7 puts this in the API and D98 says why it waited: "the references are the easy
+ * half; the sidecars are the half that matters, because `layout.json` and `views.json` key on a
+ * declaration's name, and a rename that missed them would silently discard every saved position and
+ * every lens entry that named the old one."
+ *
+ * **The references come from the linker's own walk.** `referenceSites` is the list the linker resolves
+ * and reports on, so a reference this rewrites is exactly a reference the checker would have
+ * complained about. Finding them with a second walk — or worse, by searching the text — is how a
+ * rename comes to miss a `carries` or an `undo`, or to rewrite a word inside a comment.
+ *
+ * **What is not a reference, and so is not reached.** A field's own name, a step's own name and a
+ * declaration's own name are not references. A predicate names fields and enum members rather than
+ * declarations (D106), so `where envelope.channel == Kiosk` is untouched — which is correct, because
+ * renaming an enum does not rename its members, and an enum member is not a declaration to rename.
+ *
+ * **Only the last segment.** A reference may be written bare, qualified, or through an import alias,
+ * and all three stay as they were apart from the name: `shop.Placed` becomes `shop.Accepted`, and an
+ * alias keeps its alias.
+ *
+ * **Not a package, and not an upcast.** A package's name is the wire-type prefix of everything in it,
+ * which makes renaming one a different and much larger operation. An upcast has no name of its own —
+ * `nameOf` on one finds the message it is about — so renaming it is not a thing to ask for; renaming
+ * that message updates it, through the walk, like any other reference.
+ */
+const RENAMEABLE = new Set<Decl["kind"]>([
+  "label",
+  "value",
+  "enum",
+  "record",
+  "envelope",
+  "message",
+  "pipe",
+  "service",
+  "saga",
+  "schedule",
+]);
+
+/** `shop.Placed` with `Accepted` for its last segment. An alias or a bare name keeps its shape. */
+const withLastSegment = (text: string, to: string): string => {
+  const at = text.lastIndexOf(".");
+  return at < 0 ? to : `${text.slice(0, at + 1)}${to}`;
+};
+
+/** A legal declaration name: `10-grammar.md`'s `ident`, which is what the lexer reads as one. */
+const isIdent = (text: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(text);
+
+/**
+ * The selector strings a sidecar could be keying on, lowercased for comparison.
+ *
+ * Both the qualified and the bare form, because `layout.json` keys on `idOf` — always qualified — and
+ * `views.json`'s own examples do both (`package:acme.retail.sales` beside `service:KioskBridge`). A
+ * pipe's dead-letter companion is addressed by its own name with `.dead` after it, which is a key a
+ * rename has to carry along or the lens quietly stops matching.
+ */
+function sidecarKeys(decl: Decl): Map<string, string> {
+  const out = new Map<string, string>();
+  const add = (from: string, to: string): void => {
+    out.set(from.toLowerCase(), to);
+  };
+  const kind = decl.id.kind;
+  for (const name of [qualify(decl.id), decl.id.name]) {
+    add(`${kind}:${name}`, name);
+    if (kind === "pipe") add(`${kind}:${name}.dead`, name);
+  }
+  return out;
+}
+
+/**
+ * Edits to one sidecar, found by scanning its quoted strings.
+ *
+ * A targeted replacement of the string's contents rather than a re-serialization, for the reason
+ * section 7.2 gives for every other operation: the file holds a `_comment`, an ordering and a shape
+ * somebody chose, and writing it back from a parse would discard all three. Matched
+ * case-insensitively because that is how a lens matches (D40), so a selector written in another case
+ * is still the same selector and still has to move.
+ */
+function sidecarEdits(file: string, source: string, decl: Decl, to: string): TextEdit[] {
+  const keys = sidecarKeys(decl);
+  const out: TextEdit[] = [];
+  // JSON strings only, so a key inside a `_comment` is the one place a false positive could hide —
+  // and a comment that mentions the old name is prose, not a key, so it is left alone on purpose.
+  for (const match of source.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    const whole = match[0];
+    const inner = match[1] ?? "";
+    const at = match.index;
+    if (at === undefined) continue;
+    const found = keys.get(inner.toLowerCase());
+    if (found === undefined) continue;
+    const colon = inner.indexOf(":");
+    const tail = inner.slice(colon + 1);
+    const renamed = `${inner.slice(0, colon + 1)}${withLastSegment(tail.endsWith(".dead") ? tail.slice(0, -5) : tail, to)}${tail.endsWith(".dead") ? ".dead" : ""}`;
+    out.push({ file, start: at, end: at + whole.length, text: `"${renamed}"` });
+  }
+  return out;
+}
+
+export function rename(
+  editable: Editable,
+  what: {
+    /** The declaration, by qualified or bare name, optionally `kind:name`. */
+    readonly decl: string;
+    readonly to: string;
+  },
+): Mutation {
+  const op = "rename";
+  const describe = `rename ${what.decl} to ${what.to}`;
+  const { model } = editable;
+
+  const decl = model.decls.find((d) => RENAMEABLE.has(d.kind) && matches(d, what.decl));
+  if (decl === undefined) {
+    const other = model.decls.find((d) => matches(d, what.decl));
+    return refuse(op, describe, [
+      other === undefined
+        ? error("no-such-declaration", `nothing named \`${what.decl}\``, nowhere(""))
+        : error(
+            "not-renameable",
+            other.kind === "upcast"
+              ? "an `upcast` has no name of its own; rename the message it is about"
+              : `a \`${other.kind}\` cannot be renamed through this operation`,
+            other.span,
+          ),
+    ]);
+  }
+
+  if (!isIdent(what.to)) {
+    return refuse(op, describe, [
+      error("not-an-identifier", `\`${what.to}\` is not a name 7K can read`, decl.span),
+    ]);
+  }
+
+  // D40: one namespace per package, folding case. Renaming to another spelling of the same name is
+  // allowed, since the thing in the way is the declaration itself.
+  const taken = model.symbols.get(symbolKey(decl.id.pkg, what.to));
+  if (taken !== undefined && symbolKey(taken.id.pkg, taken.id.name) !== symbolKey(decl.id.pkg, decl.id.name)) {
+    return refuse(op, describe, [
+      error(
+        "name-taken",
+        `\`${decl.id.pkg}\` already declares \`${taken.id.name}\`, and names fold case`,
+        taken.span,
+      ),
+    ]);
+  }
+
+  const tree = editable.trees.get(decl.file);
+  const node = tree === undefined ? undefined : nodeFor(editable, decl);
+  const own = node === undefined ? undefined : nameTokenOf(node);
+  if (own === undefined) {
+    return refuse(op, describe, [
+      error("no-tree", `\`${decl.file}\` was not parsed, so it cannot be edited`, decl.span),
+    ]);
+  }
+
+  const edits: TextEdit[] = [
+    { file: decl.file, start: own.start, end: own.end, text: what.to },
+  ];
+
+  // ---- the references, from the linker's own list ---------------------------
+
+  const key = symbolKey(decl.id.pkg, decl.id.name);
+  for (const site of referenceSites(model)) {
+    const id = model.resolve(site.ref);
+    if (id === undefined || symbolKey(id.pkg, id.name) !== key) continue;
+    edits.push({
+      file: site.ref.span.file,
+      start: site.ref.span.start,
+      end: site.ref.span.end,
+      text: withLastSegment(site.ref.text, what.to),
+    });
+  }
+
+  // ---- the scenarios -------------------------------------------------------
+  //
+  // Not model IR, so not in the walk — and they are the conformance suite (`30-scenarios.md` 7.8), so
+  // a rename that left them behind would break the thing that proves the model means anything. Every
+  // qualified name in a scenario file, resolved by `lookup`, which is the resolver the scenario
+  // checker itself uses: `MsgRef` and `PipeRef` both wrap a `QName`, so one node kind covers all
+  // three forms.
+  for (const scenario of scenarioTreesOf(editable)) {
+    for (const name of descendants(scenario.root)) {
+      if (name.kind !== "QName") continue;
+      const text = flatText(name);
+      // `commands.dead` is derived and never declared (D45), so it resolves against the pipe it
+      // belongs to — and renaming that pipe has to carry the suffix along. Left out, the rename looked
+      // clean and the scenario stopped resolving, which the example tree caught: three
+      // `expect no message on commands.dead` lines survived a rename of `commands`.
+      const dead = text.endsWith(".dead");
+      const base = dead ? text.slice(0, -5) : text;
+      const found = model.lookup(scenario.pkg, base);
+      if (found === undefined) continue;
+      if (symbolKey(found.id.pkg, found.id.name) !== key) continue;
+      edits.push({
+        file: scenario.file,
+        start: name.start,
+        end: name.end,
+        text: `${withLastSegment(base, what.to)}${dead ? ".dead" : ""}`,
+      });
+    }
+  }
+
+  // ---- the sidecars --------------------------------------------------------
+  //
+  // Only the ones the caller handed over. A caller that keeps them elsewhere gets a warning saying
+  // what it still has to do, rather than a silent half-rename.
+  let sawSidecar = false;
+  for (const [file, source] of Object.entries(editable.sources)) {
+    const base = file.replace(/\\/g, "/").split("/").pop() ?? file;
+    if (base !== "layout.json" && base !== "views.json") continue;
+    sawSidecar = true;
+    edits.push(...sidecarEdits(file, source, decl, what.to));
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  if (!sawSidecar) {
+    diagnostics.push(
+      warn(
+        "sidecars-not-in-hand",
+        "no `layout.json` or `views.json` was given to this, so a saved position or lens entry naming " +
+          "the old name will not be carried over",
+        decl.span,
+      ),
+    );
+  }
+
+  // The qualified name of a message *is* its wire type (`02-contract.md`), so this is not a local
+  // tidy-up: anything already deployed against the old one stops matching. Said rather than refused,
+  // because renaming before anything is deployed is exactly when it should be easy.
+  if (decl.kind === "message") {
+    diagnostics.push(
+      warn(
+        "wire-type-changes",
+        `\`${qualify(decl.id)}\` is the wire type, so this is a breaking change for anything already ` +
+          "deployed against it",
+        decl.span,
+      ),
+    );
+  }
+
+  return {
+    op,
+    describe: `rename ${decl.id.name} to ${what.to}`,
+    edits,
+    diagnostics,
+  };
+}
 
 // ---- removing declarations --------------------------------------------------
 

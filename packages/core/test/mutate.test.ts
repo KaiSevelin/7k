@@ -35,6 +35,7 @@ import {
   isPossible,
   removePipe,
   removeService,
+  rename,
   referenceTo,
   type Editable,
   type Mutation,
@@ -1363,5 +1364,219 @@ describe("removing declarations", () => {
     )["a.7k"]!;
     expect(back).toContain("service Spare {");
     expect(back).not.toMatch(/\n\n\n/);
+  });
+});
+
+/**
+ * `rename`.
+ *
+ * D98 named the hard half: "the references are the easy half; the sidecars are the half that matters,
+ * because `layout.json` and `views.json` key on a declaration's name, and a rename that missed them
+ * would silently discard every saved position and every lens entry that named the old one." So the
+ * sidecars are tested first.
+ *
+ * The references are asserted as a property — *what is left still checks out, and nothing outside a
+ * reference moved* — rather than by counting edits, because the count is the part that should be free
+ * to change when a clause is added to the language.
+ */
+const LAYOUT = `{
+  "_comment": "Kept, because a rename must not discard it.",
+  "*": {
+    "collapsed": ["package:shop"],
+    "nodes": {
+      "service:shop.Storefront": { "x": 80, "y": 40 },
+      "pipe:shop.events": { "x": 320, "y": 40 },
+      "pipe:shop.events.dead": { "x": 320, "y": 160 }
+    }
+  }
+}
+`;
+
+const SIDE_VIEWS = `{
+  "_comment": "PiiFlow is here to be left alone.",
+  "Front": { "include": ["service:Storefront", "pipe:shop.events"] },
+  "PiiFlow": { "include": ["label:pii"] }
+}
+`;
+
+const WITH_SIDECARS = {
+  ...SCEN_FILES,
+  "layout.json": LAYOUT,
+  ".7k/views.json": SIDE_VIEWS,
+};
+
+describe("rename", () => {
+  const sides = (): Editable => {
+    const ws = buildWorkspace(
+      Object.entries(WITH_SIDECARS)
+        .filter(([path]) => path.endsWith(".7k"))
+        .map(([path, source]) => ({ path, source })),
+    );
+    expect(ws.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    return { model: ws.model, trees: ws.trees, sources: WITH_SIDECARS };
+  };
+
+  /** Applied, with properties 2 and 3 asserted on the way through. */
+  const applied = (
+    mutation: Mutation,
+    files: Readonly<Record<string, string>> = WITH_SIDECARS,
+  ): Record<string, string> => {
+    expect(mutation.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(mutation.edits.length).toBeGreaterThan(0);
+    return check(files, mutation);
+  };
+
+  const errorsIn = (files: Readonly<Record<string, string>>): string[] =>
+    buildWorkspace(
+      Object.entries(files)
+        .filter(([path]) => path.endsWith(".7k"))
+        .map(([path, source]) => ({ path, source })),
+    )
+      .diagnostics.filter((d) => d.severity === "error")
+      .map((d) => `${d.code}: ${d.message}`);
+
+  describe("the sidecars, which are the half that matters", () => {
+    it("moves a saved position with the service", () => {
+      const after = applied(rename(sides(), { decl: "Storefront", to: "Shopfront" }));
+      expect(after["layout.json"]).toContain('"service:shop.Shopfront"');
+      expect(after["layout.json"]).not.toContain("Storefront");
+      // Everything else in the file, including the comment and the collapsed list, survives.
+      expect(after["layout.json"]).toContain('"collapsed": ["package:shop"]');
+      expect(after["layout.json"]).toContain("Kept, because a rename must not discard it.");
+      expect(after["layout.json"]).toContain('"pipe:shop.events": { "x": 320, "y": 40 }');
+    });
+
+    it("moves a lens entry, bare or qualified", () => {
+      const after = applied(rename(sides(), { decl: "Storefront", to: "Shopfront" }));
+      expect(after[".7k/views.json"]).toContain('"service:Shopfront"');
+      // And a lens about something else is untouched.
+      expect(after[".7k/views.json"]).toContain('"label:pii"');
+    });
+
+    it("carries a dead letter's own key along with its pipe", () => {
+      const after = applied(rename(sides(), { decl: "events", to: "published" }));
+      expect(after["layout.json"]).toContain('"pipe:shop.published"');
+      expect(after["layout.json"]).toContain('"pipe:shop.published.dead"');
+      expect(after["layout.json"]).not.toContain("events");
+    });
+
+    it("says so when it was given none, rather than half-renaming in silence", () => {
+      const mutation = rename(scen(), { decl: "Storefront", to: "Shopfront" });
+      const said = mutation.diagnostics.find((d) => d.code === "sidecars-not-in-hand");
+      expect(said?.severity).toBe("warning");
+      expect(mutation.edits.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("the references", () => {
+    it("leaves a model that still checks out", () => {
+      for (const [decl, to] of [
+        ["Storefront", "Shopfront"],
+        ["events", "published"],
+        ["OrderPlaced", "OrderAccepted"],
+        ["Audited", "Noted"],
+      ] as const) {
+        const after = applied(rename(sides(), { decl, to }));
+        expect(errorsIn(after), `${decl} -> ${to}`).toEqual([]);
+        expect(after["shop.7k"], `${decl} -> ${to}`).not.toMatch(new RegExp(`\\b${decl}\\b`));
+      }
+    });
+
+    it("keeps a qualifier, changing only the last segment", () => {
+      const files = {
+        "shop.7k": SHOP,
+        "other.7k": `package other\n\nimport shop\n\npipe inbox : queue { retention 7d }\n\nservice Watcher {\n  reacts shop.OrderPlaced from shop.events { replies none }\n}\n`,
+      };
+      const ws = buildWorkspace(
+        Object.entries(files).map(([path, source]) => ({ path, source })),
+      );
+      expect(ws.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+      const where: Editable = { model: ws.model, trees: ws.trees, sources: files };
+
+      const after = check(files, rename(where, { decl: "OrderPlaced", to: "OrderAccepted" }));
+      expect(after["other.7k"]).toContain("reacts shop.OrderAccepted from shop.events");
+      expect(after["other.7k"]).not.toContain("shop.OrderPlaced");
+      expect(errorsIn(after)).toEqual([]);
+    });
+
+    it("reaches a scenario, including a derived dead letter", () => {
+      const files = {
+        ...SCEN_FILES,
+        "shop.scenario.7k": `${SHOP_SCENARIOS}\nscenario Dead {\n  seed 3\n  expect no message on inbound.dead\n}\n`,
+      };
+      const ws = buildWorkspace(
+        Object.entries(files).map(([path, source]) => ({ path, source })),
+      );
+      const where: Editable = { model: ws.model, trees: ws.trees, sources: files };
+
+      const after = check(files, rename(where, { decl: "inbound", to: "arriving" }));
+      expect(after["shop.scenario.7k"]).toContain("on arriving.dead");
+      expect(after["shop.scenario.7k"]).not.toContain("inbound");
+      expect(errorsIn(after)).toEqual([]);
+    });
+
+    it("renames a service a scenario publishes as", () => {
+      const after = applied(rename(sides(), { decl: "Storefront", to: "Shopfront" }));
+      expect(after["shop.scenario.7k"]).toContain("publish PlaceOrder as Shopfront");
+    });
+
+    it("leaves a comment that happens to mention the name", () => {
+      const files = {
+        ...SCEN_FILES,
+        "shop.7k": SHOP.replace("pipe events", "// events is the topic\npipe events"),
+      };
+      const ws = buildWorkspace(
+        Object.entries(files).map(([path, source]) => ({ path, source })),
+      );
+      const where: Editable = { model: ws.model, trees: ws.trees, sources: files };
+      const after = check(files, rename(where, { decl: "events", to: "published" }));
+      // Prose is not a reference. A text search would have rewritten this.
+      expect(after["shop.7k"]).toContain("// events is the topic");
+      expect(errorsIn(after)).toEqual([]);
+    });
+  });
+
+  describe("what it refuses, and what it only says", () => {
+    it("says that a message's wire type changes", () => {
+      const mutation = rename(sides(), { decl: "OrderPlaced", to: "OrderAccepted" });
+      const said = mutation.diagnostics.find((d) => d.code === "wire-type-changes");
+      expect(said?.severity).toBe("warning");
+      expect(said?.message).toContain("shop.OrderPlaced");
+      // Said, not refused: renaming before anything is deployed should be easy.
+      expect(mutation.edits.length).toBeGreaterThan(0);
+    });
+
+    it("refuses a name the package already has, folding case (D40)", () => {
+      const mutation = rename(sides(), { decl: "events", to: "INBOUND" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("name-taken");
+    });
+
+    it("allows another spelling of the same name, since the thing in the way is itself", () => {
+      const after = applied(rename(sides(), { decl: "events", to: "Events" }));
+      expect(after["shop.7k"]).toContain("pipe Events");
+      expect(errorsIn(after)).toEqual([]);
+    });
+
+    it("refuses something that is not a name", () => {
+      const mutation = rename(sides(), { decl: "events", to: "two words" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("not-an-identifier");
+    });
+
+    it("refuses an upcast, and says what to rename instead", () => {
+      const source = `package shop\n\nmessage M v1.1 @event {\n  a: string\n  b: string? @since(v1.1)\n}\n\nupcast M v1.0 to v1.1 {\n  b = absent\n}\n`;
+      const ws = buildWorkspace([{ path: "a.7k", source }]);
+      const where: Editable = { model: ws.model, trees: ws.trees, sources: { "a.7k": source } };
+      const mutation = rename(where, { decl: "upcast:shop.M", to: "N" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.message).toContain("rename the message it is about");
+    });
+
+    it("refuses something that is not there", () => {
+      const mutation = rename(sides(), { decl: "Ghost", to: "Spirit" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("no-such-declaration");
+    });
   });
 });

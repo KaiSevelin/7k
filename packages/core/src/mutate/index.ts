@@ -76,5 +76,6 @@ export {
   disconnectEmit,
   disconnectReact,
   referenceTo,
+  rename,
   type Editable,
 } from "./operations.js";
