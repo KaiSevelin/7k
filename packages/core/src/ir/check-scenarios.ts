@@ -12,7 +12,8 @@
 
 import type { Diagnostic } from "../diagnostics.js";
 import type { LinkedModel } from "./link.js";
-import { symbolKey, type Decl, type ServiceIr } from "./model.js";
+import { qualify, symbolKey, type Decl, type ServiceIr } from "./model.js";
+import { trafficOf } from "./labels.js";
 import { effectiveMocks, type Outcome, type ScenarioFile, type Selection } from "./scenario.js";
 
 const outcomesOf = (s: Selection): Outcome[] => {
@@ -32,6 +33,9 @@ export function checkScenarios(
   files: readonly ScenarioFile[],
 ): Diagnostic[] {
   const out: Diagnostic[] = [];
+  // Once for the whole run: which messages travel on which pipe is a fact about the model, not about
+  // any one scenario.
+  const traffic = trafficOf(model);
 
   for (const file of files) {
     if (file.package !== "" && !model.packages.has(file.package)) {
@@ -195,13 +199,31 @@ export function checkScenarios(
           // resolved against the pipe it belongs to (D45).
           if (e.pipe !== undefined) {
             const base = e.pipe.endsWith(".dead") ? e.pipe.slice(0, -5) : e.pipe;
-            if (look(base) === undefined) {
+            const pipe = look(base);
+            if (pipe === undefined) {
               out.push({
                 code: "unresolved-reference",
                 severity: "error",
                 message: `cannot find a pipe named \`${base}\``,
                 span: e.span,
               });
+            } else if (!e.negated && e.message !== undefined) {
+              const message = look(e.message);
+              const carried = traffic.get(symbolKey(pipe.id.pkg, pipe.id.name));
+              if (
+                message !== undefined &&
+                carried !== undefined &&
+                !carried.has(symbolKey(message.id.pkg, message.id.name))
+              ) {
+                out.push({
+                  code: "expect-not-carried",
+                  severity: "warning",
+                  message:
+                    `nothing puts \`${qualify(message.id)}\` on \`${qualify(pipe.id)}\`, so this ` +
+                    "expectation cannot be met by any implementation that follows the model",
+                  span: e.span,
+                });
+              }
             }
           }
           continue;

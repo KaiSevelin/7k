@@ -223,6 +223,17 @@ would silently become one about duration. `expect no stuck saga` is the separate
 about liveness: an instance waiting with neither a step timeout nor a deadline above it, or
 one still running past a deadline that should have ended it.
 
+**An expectation the model cannot satisfy is reported before the run.** `expect <Message> on <pipe>`
+where nothing in the model puts that message on that pipe is `expect-not-carried`, a warning: no
+implementation that follows the model can ever satisfy it, and a run would report it as an ordinary
+failure, leaving you to work out whether the implementation is broken or the claim was never possible.
+It is a warning rather than an error because a scenario written ahead of the service it describes is a
+reasonable thing to have in the tree, and the fix may be the missing `emits` rather than the
+expectation. `expect no <Message> on <pipe>` draws nothing even where the model forbids it — scenarios
+run against real implementations (section 7.8), and an implementation that published it anyway is
+exactly what that assertion is there to catch. A `.dead` suffix is read against the pipe it belongs to,
+since anything a pipe carries can end up in its dead letters.
+
 The pair that makes a saga trustworthy is `expect no <CompensatingCommand>` alongside its opposite:
 compensation must run for a step that completed and must **not** run for one that did not
 (`04-process.md` section 1.4). Asserting only the first direction leaves the common bug uncaught.

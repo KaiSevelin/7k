@@ -117,11 +117,14 @@ export function propagatedLabels(model: LinkedModel): ReadonlyMap<string, Readon
 /**
  * Which messages travel on each pipe, by `symbolKey`.
  *
+ * Exported because it answers a question more than one analysis has: a label flows where its message
+ * flows, and a scenario asserting a message on a pipe is asserting something about the same table.
+ *
  * The union of what services actually emit and react to, plus a declared `carries` allowlist. Actual
  * traffic rather than the allowlist alone, because `carries` is optional and a pipe without one still
  * carries whatever is sent to it.
  */
-function trafficOf(model: LinkedModel): Map<string, Set<string>> {
+export function trafficOf(model: LinkedModel): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
 
   const add = (pipeRef: Ref, messageRef: Ref): void => {

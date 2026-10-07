@@ -3497,6 +3497,56 @@ of this", not "is this the thing I dispatch on".
 
 ---
 
+## D109 — A scenario is a claim about the system, so a claim the model forbids is reported
+
+`expect <Message> on <pipe>` where nothing in the model puts that message on that pipe is
+`expect-not-carried`, a warning. The negated form draws nothing. Neither does an `expect` with no
+pipe, and a `.dead` suffix is read against the pipe it belongs to, since anything a pipe carries can
+end up in its dead letters.
+
+**Why:** the question was whether scenarios are only good for visualizing a flow — a real test sends
+the first message and lets the system trigger the rest, so an assertion about a later step looked like
+it could only be describing a picture. It is not: `30-scenarios.md` 7.8 requires the same scenarios to
+run against the sandbox and against a real implementation and produce identical observable behaviour,
+which makes them the conformance suite. A scenario is therefore an executable claim, and a claim can
+be wrong about the system it claims about. What was missing was the one way of being wrong that a run
+cannot distinguish from a broken implementation.
+
+**Two tempting diagnostics were rejected first**, and the reasoning is the part worth keeping.
+
+*That `expect M on p` restates a mock.* It looks circular when a mockset says `on Go reply Done` and
+the scenario then expects `Done` — the mock was told to do it. It is not circular: a mock only fires on
+its trigger, so asserting its reply pins that the trigger was sent at all, that routing delivered it,
+and that it arrived inside the clock the scenario drives. The assertion is about the three things
+between the mock and the expectation, not about the mock.
+
+*That `expect no M on p` where the model forbids M on p is vacuous.* This is the opposite of vacuous,
+and for the same reason as above: scenarios run against real implementations, and an implementation
+that published it anyway is exactly what such an assertion is there to catch. The model forbidding
+something is a reason to assert it, not a reason to stop.
+
+**What survived is the positive form of the second.** `expect M on p` where nothing emits M, or nothing
+routes it to `p`, is unsatisfiable by any implementation that follows the model. A run reports it as a
+plain failure and leaves you to work out whether the implementation is broken or the claim was never
+possible — and that is the diagnostic's whole value: it answers the question before the run.
+
+**A warning, not an error**, by D83's test — a warning nobody can act on is worse than none, and this
+one is actionable two ways: fix the expectation, or add the `emits` the model is missing. The second is
+why it is not an error. A scenario written ahead of the service it describes is a reasonable thing to
+have in the tree, and the model changing under a scenario is the normal direction of work.
+
+**It reuses `trafficOf`**, the same table `labels.ts` already computes to propagate a label from a
+message to the pipes it travels on. A label flows where its message flows, and a scenario asserting a
+message on a pipe is asserting something about that identical relation — so the function is now
+exported rather than reimplemented. One table, as in D62.
+
+Measured over both example trees: zero new diagnostics on `7k-spider/examples` (6 units, 0 errors, 0
+warnings) and no change on `7K/examples` beyond the six warnings already there. The schedule case —
+`expect SweepExpired on commands count 3` — stays silent because a service emits it and the pipe
+declares `carries` it, which is the pair the check reads.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -3511,6 +3561,7 @@ One remains. All others are resolved — see the decisions named.
 | Was | Resolved by |
 |---|---|
 | Upcasts declared and never applied | D88 — applied on receipt, chained, with a scenario pinning the version |
+| Whether a scenario is a test or only a picture | D109 — the conformance suite, and now checked against the model |
 | CQRS, read models, API Composition | D107 — declined. Expressible already; the clause that would check it is unenforceable |
 | Invariants declared and never checked | D89 — evaluated on receipt, per record and per element |
 | Projections specified and unimplemented | D90 — JSON Schema 2020-12 in `packages/project`, written by `7k project` |

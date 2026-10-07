@@ -361,3 +361,50 @@ describe("lowering to values rather than to text (D73)", () => {
     expect(message.version).toBe("1.0");
   });
 });
+
+/**
+ * An expectation nothing in the model can satisfy.
+ *
+ * A scenario is an executable claim about the system, so it can be wrong about the system — and this
+ * is the way of being wrong that a run reports as a plain failure, leaving you to work out whether the
+ * implementation is broken or the claim was never possible. `Nope` is emitted nowhere, so no
+ * implementation that follows the model can ever put it on a pipe.
+ *
+ * Only the positive form. `expect no Nope on events` asserts something the model already forbids, and
+ * that is not vacuous here: scenarios are the conformance suite, and an implementation that published
+ * it anyway is exactly what such an assertion is there to catch.
+ */
+describe("an expectation the model cannot satisfy", () => {
+  // Every severity, not `codes`: this one is a warning, because the model can change under it.
+  // And the presence of this code rather than the whole list — the fixture has warnings of its own.
+  const one = (body: string): string[] =>
+    ws(`scenarios for p\n\nscenario S {\n${body}\n}\n`).diagnostics.map((d) => d.code);
+
+  it("is reported when nothing puts the message on that pipe", () => {
+    expect(one("  advance 1s\n  expect Nope on events")).toContain("expect-not-carried");
+  });
+
+  it("says nothing when something does", () => {
+    expect(one("  advance 1s\n  expect Done on events")).not.toContain("expect-not-carried");
+  });
+
+  it("is about the pair, not the message", () => {
+    // `Done` is real and travels, but never on `commands`.
+    expect(one("  advance 1s\n  expect Done on commands")).toContain("expect-not-carried");
+  });
+
+  /** The negative is a conformance guard, not a tautology — see the note above. */
+  it("leaves a negated expectation alone", () => {
+    expect(one("  advance 1s\n  expect no Nope on events")).not.toContain("expect-not-carried");
+  });
+
+  it("leaves an expectation with no pipe alone", () => {
+    expect(one("  advance 1s\n  expect Nope")).not.toContain("expect-not-carried");
+  });
+
+  /** Anything a pipe carries can end up on its dead letters, so the parent's traffic is the test. */
+  it("reads a `.dead` pipe against the pipe it belongs to", () => {
+    expect(one("  advance 1s\n  expect Go on commands.dead")).not.toContain("expect-not-carried");
+    expect(one("  advance 1s\n  expect Nope on commands.dead")).toContain("expect-not-carried");
+  });
+});
