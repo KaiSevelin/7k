@@ -56,6 +56,8 @@ export {
   addScenario,
   addService,
   addStep,
+  carriersOf,
+  emittersOf,
   setDeadline,
   setTerminal,
   setUndo,

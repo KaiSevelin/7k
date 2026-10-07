@@ -1018,8 +1018,14 @@ function locateScenario(
   };
 }
 
-/** The services whose `emits` would put this message on a pipe. */
-function emittersOf(model: LinkedModel, message: NodeId): ServiceIr[] {
+/**
+ * The services whose `emits` would put this message on a pipe.
+ *
+ * Exported so a form can offer exactly what `addPublish` accepts. A front end that worked out the
+ * senders itself would be a second answer to the question the operation already answers, and the first
+ * time the two disagreed the list would offer a publish the operation refuses.
+ */
+export function emittersOf(model: LinkedModel, message: NodeId): ServiceIr[] {
   const key = symbolKey(message.pkg, message.name);
   const out: ServiceIr[] = [];
   for (const decl of model.decls) {
@@ -1039,8 +1045,10 @@ function emittersOf(model: LinkedModel, message: NodeId): ServiceIr[] {
  * `trafficOf` rather than a second walk over `emits` and `reacts`, for the reason D109 exported it: a
  * scenario asserting a message on a pipe is asserting something about that one table, and an editor
  * offering a different answer from the checker is how a front end comes to disagree with Core.
+ *
+ * Exported for the same reason `emittersOf` is: it is what a form offers.
  */
-function carriersOf(model: LinkedModel, message: NodeId): NodeId[] {
+export function carriersOf(model: LinkedModel, message: NodeId): NodeId[] {
   const key = symbolKey(message.pkg, message.name);
   const out: NodeId[] = [];
   for (const [pipeKey, carried] of trafficOf(model)) {
