@@ -33,6 +33,26 @@ export function parseDuration(text: string): number | undefined {
   return matched === text.length && matched > 0 ? total : undefined;
 }
 
+/**
+ * A duration as a reader would have written it: `30s`, `24h`, `250ms`.
+ *
+ * The inverse of `parseDuration` over the values it can express exactly, and here for the same reason
+ * it is: two analyses had a private copy of this, and a third was about to. The largest unit that
+ * divides evenly, so `3_600_000` is `1h` rather than `60m`, and milliseconds when nothing else is
+ * exact.
+ */
+export function writeDuration(ms: number): string {
+  for (const [size, suffix] of [
+    [86_400_000, "d"],
+    [3_600_000, "h"],
+    [60_000, "m"],
+    [1_000, "s"],
+  ] as const) {
+    if (ms >= size && ms % size === 0) return `${ms / size}${suffix}`;
+  }
+  return `${ms}ms`;
+}
+
 /** A size literal in bytes. `kb` and `mb` are powers of 1024. */
 export function parseSize(text: string): number | undefined {
   const m = /^(\d+)(b|kb|mb)$/i.exec(text.replaceAll("_", ""));

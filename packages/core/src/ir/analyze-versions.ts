@@ -13,6 +13,7 @@
  */
 
 import type { Diagnostic } from "../diagnostics.js";
+import { writeDuration as duration } from "../literals.js";
 import type { LinkedModel } from "./link.js";
 import type { Operand, Predicate } from "./predicate.js";
 import {
@@ -183,18 +184,6 @@ function retryHorizon(react: ReactIr): number {
   return total;
 }
 
-/** `30s`, `24h` — a duration as a reader would have written it. */
-function duration(ms: number): string {
-  for (const [size, suffix] of [
-    [86_400_000, "d"],
-    [3_600_000, "h"],
-    [60_000, "m"],
-    [1_000, "s"],
-  ] as const) {
-    if (ms >= size && ms % size === 0) return `${ms / size}${suffix}`;
-  }
-  return `${ms}ms`;
-}
 
 /** Milliseconds for a duration literal as the clause text holds it. */
 function durationMs(text: string): number | undefined {

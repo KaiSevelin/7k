@@ -3547,6 +3547,98 @@ declares `carries` it, which is the pair the check reads.
 
 ---
 
+## D110 — Scenarios are edited through the mutation API, and the boundary does not move
+
+`addScenario`, `addPublish`, `addExpect` and `addAdvance` join the mutation API. A publish the model
+cannot route is `publish-not-emitted`, a warning.
+
+**Why:** the question was whether scenarios should be lifted out of being a sibling specification and
+into 7K Core. As code they were already entirely in Core — one lexer and one keyword table (contextual,
+so nothing is reserved), `parser/scenarios.ts` beside the model's parser, `ir/scenario.ts`,
+`ir/check-scenarios.ts`, and `buildWorkspace` parsing every file into `trees` whatever its kind and
+merging every diagnostic into one stream. The only piece outside Core is a runtime, which is where it
+belongs.
+
+So the question was really whether they should become part of the *language*, and the answer is the one
+`00-overview.md` already recorded: no, because the vocabulary would be some forty per cent of the
+Process layer. Three things sharpen it.
+
+**The check is one-way, and that is load-bearing.** `checkScenarios(model, scenarios)` means a scenario
+cannot change what the model means. Put `ScenarioFile` into `LinkedModel` and an analysis can read it —
+and then a model's validity depends on its tests. That is section 2.0's rot from the other direction: a
+model whose meaning shifts when somebody edits a test is one people learn not to trust. The phase
+ordering in `workspace.ts` — skip the scenario checks while linkage is broken — exists only because the
+model is complete before scenarios are considered.
+
+**`LinkedModel` is the hub contract**, consumed by the sandbox, Spider and all four providers. A member
+every one of them must learn to ignore is a tax paid by five consumers to save one indirection in Core.
+
+**The volume is already inverted.** `soldout.scenario.7k` is 254 lines against `sales.7k`'s 141, and a
+real conformance suite only widens that. Merging into the package file would also force one scenario set
+per package, against section 1's explicit "several scenario files may reference the same package".
+
+**What the question did find was a gap, and it was not the status.** The mutation API had thirteen
+operations and not one touched a scenario, so Spider could fill a saga's missing `undo` by clicking the
+gap the view drew and could not add a single line to a scenario. The editing story stopped at the model
+boundary for no reason anyone had decided. `Editable` is `{ model, trees, sources }` and `trees` already
+held the scenario CST, so closing it changed no boundary at all: the operations read the CST, and
+`Editable` gains nothing.
+
+**The two unknowns in a scenario step are already in the model**, which is what makes these operations
+worth having rather than text templates. A publish names a sender and the pipe comes from that service's
+`emits` (section 3), so the senders are the services that emit the message. An expectation names a pipe,
+and the pipes are the ones that carry it — read from `trafficOf`, the same table the checker reads, for
+the reason D109 exported it. Each is derived where the model leaves one answer, refused with the
+candidates named where it leaves several, since *which* is the decision being recorded, and refused with
+the checker's own diagnostic code where it leaves none.
+
+That last case is the point: **`addExpect` cannot write a line that draws `expect-not-carried`.** An
+operation that refuses a diagnostic is worth more than one that writes it and warns, and it is the
+concrete payoff for having put the derivation in Core rather than in a front end — an editor offering a
+different answer from the checker is exactly how three front ends come to disagree.
+
+**`publish-not-emitted` is the symmetric check**, and it closes an asymmetry this change would otherwise
+have introduced: `addPublish` refused a publish nothing could route while typing the same line by hand
+drew nothing. It matters more than the expectation case. An expectation that cannot be met fails an
+assertion; a publish that cannot route stops the scenario from starting, which is the one outcome that
+says nothing at all about the system under test. A warning rather than an error, by D83 and for D109's
+reason: the fix may be the missing `emits`.
+
+**The clock is derived too, and this is the one that would have gone unnoticed.** `at` is a point on the
+scenario's own clock and absolute, so a step appended to a scenario that has already advanced an hour
+has to say `at 1h` to happen where it is written. A runtime treats a point in the past as *now* rather
+than as an error — which is exactly what makes getting it wrong invisible: the file would say `at 0s`,
+the run would do it at an hour, and nothing would report the difference. So `addPublish` sums the
+advances already written. On the example tree it writes `at 2s` into `CheckoutSucceeds`, which is where
+that scenario's clock stands.
+
+**No payload, deliberately.** A publish is written as its clause, and a message with required fields
+draws `publish-without-body` naming them and naming `unchecked`. A body is canonical JSON with its own
+normalization (`01-kernel.md` section 7), and accepting it as text here would make this the one
+operation whose output parses only if the caller was careful. Every operation in the module writes text
+that parses; that property is worth more than the convenience, and a composer that produces canonical
+JSON is a separate thing that can feed a separate operation later.
+
+**No file creation.** A `TextEdit` is a range in a file that already exists, which is what makes every
+operation invertible without an inverse per operation (`mutate/edit.ts`). A package with no scenario file
+is refused by name rather than guessed at.
+
+**A seed is written.** Section 2 makes reproducibility conditional on one, and a conformance suite whose
+whole claim is that it produces the same result twice should not leave that to a runtime's default. `1`
+is as arbitrary as `addPipe`'s `7d`, and arbitrary in the same visible way: a line somebody can change.
+
+**`writeDuration` moved to `literals.ts`** on the way past. Two analyses had a private copy of it and
+this was about to be the third, against that module's own stated reason for existing — "shared rather
+than re-derived per consumer, because a runtime and the checker disagreeing about what `1h30m` means is
+exactly the class of divergence the published interchange artifacts exist to prevent".
+
+Verified beyond the unit tests: each operation applied to `examples/shop.scenario.7k` leaves the tree at
+its six pre-existing warnings with nothing new, and the lines `addExpect` and `addAdvance` wrote into
+`CheckoutSucceeds` **run green through the sandbox** — seven assertions where there were six. Parseable
+is not the same as runnable, and the second is the claim worth making.
+
+---
+
 ## Open questions
 
 One remains. All others are resolved — see the decisions named.
@@ -3561,6 +3653,7 @@ One remains. All others are resolved — see the decisions named.
 | Was | Resolved by |
 |---|---|
 | Upcasts declared and never applied | D88 — applied on receipt, chained, with a scenario pinning the version |
+| Whether scenarios should be lifted into the language | D110 — no; already in Core as code, and the gap was the mutation API |
 | Whether a scenario is a test or only a picture | D109 — the conformance suite, and now checked against the model |
 | CQRS, read models, API Composition | D107 — declined. Expressible already; the clause that would check it is unenforceable |
 | Invariants declared and never checked | D89 — evaluated on receipt, per record and per element |

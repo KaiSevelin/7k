@@ -14,6 +14,7 @@
  */
 
 import type { Diagnostic } from "../diagnostics.js";
+import { writeDuration as duration } from "../literals.js";
 import type { LinkedModel } from "./link.js";
 import {
   qualify,
@@ -621,16 +622,3 @@ function composition(model: LinkedModel, sagas: readonly SagaIr[]): Diagnostic[]
 const nameOfKey = (sagas: readonly SagaIr[], key: string): string =>
   sagas.find((s) => symbolKey(s.id.pkg, s.id.name) === key)?.id.name ?? key;
 
-/** `30s`, `24h` — a duration as a reader would have written it. */
-function duration(ms: number): string {
-  const units: readonly [number, string][] = [
-    [86_400_000, "d"],
-    [3_600_000, "h"],
-    [60_000, "m"],
-    [1_000, "s"],
-  ];
-  for (const [size, suffix] of units) {
-    if (ms >= size && ms % size === 0) return `${ms / size}${suffix}`;
-  }
-  return `${ms}ms`;
-}

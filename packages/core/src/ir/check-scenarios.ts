@@ -179,6 +179,38 @@ export function checkScenarios(
               message: `cannot find a service named \`${p.as}\``,
               span: p.span,
             });
+            continue;
+          }
+
+          // A publish the model cannot route, which is the other half of D109. `as <Service>` names
+          // who sent it and the pipe comes from that service's `emits` (section 3), so a message
+          // nothing emits has nowhere to go. A runtime reports it when the scenario runs and the
+          // scenario does not run at all; the pair is knowable from the model before then.
+          const sender = p.as === undefined ? undefined : service(p.as);
+          const message = look(p.message);
+          if (message !== undefined) {
+            const key = symbolKey(message.id.pkg, message.id.name);
+            const emits = (s: ServiceIr): boolean =>
+              s.emits.some((e) => {
+                const id = model.resolve(e.message);
+                return id !== undefined && symbolKey(id.pkg, id.name) === key;
+              });
+            const routes =
+              sender !== undefined
+                ? emits(sender)
+                : model.decls.some((d) => d.kind === "service" && emits(d));
+            if (!routes) {
+              out.push({
+                code: "publish-not-emitted",
+                severity: "warning",
+                message:
+                  (sender === undefined
+                    ? `nothing declares \`emits ${qualify(message.id)}\``
+                    : `\`${qualify(sender.id)}\` does not declare \`emits ${message.id.name}\``) +
+                  ", so there is no pipe to publish it on and the scenario cannot run",
+                span: p.span,
+              });
+            }
           }
           continue;
         }

@@ -26,6 +26,15 @@
  *
  * The data operations — `addValue`, `addRecord`, `addField`, `setConstraint` — are local in the same way
  * the connecting ones are, and are simply not written yet.
+ *
+ * ### Scenarios, which are not part of the language and are edited here anyway
+ *
+ * `addScenario`, `addPublish`, `addExpect` and `addAdvance` write to a scenario file (`30-scenarios.md`,
+ * a sibling specification). They are here for the reason everything else is: one implementation, three
+ * front ends. The boundary that matters is the one Core already keeps — a scenario is checked *against*
+ * the model and never changes what it means — and editing text is not that boundary. Without them the
+ * editing story stopped at the model, so a saga's missing `undo` was one click away and a scenario was
+ * unreachable.
  */
 
 export {
@@ -39,8 +48,12 @@ export {
 } from "./edit.js";
 
 export {
+  addAdvance,
+  addExpect,
   addPipe,
+  addPublish,
   addSaga,
+  addScenario,
   addService,
   addStep,
   setDeadline,

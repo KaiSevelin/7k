@@ -12,7 +12,7 @@
  * `mutate/index.ts`.
  */
 
-import { childNodes, isToken, tokens, type CstNode } from "../cst.js";
+import { childNodes, childTokens, isToken, keywordOf, tokens, type CstNode } from "../cst.js";
 import type { Diagnostic, Span } from "../diagnostics.js";
 import {
   qualify,
@@ -24,6 +24,9 @@ import {
   type Terminal,
 } from "../ir/model.js";
 import type { LinkedModel } from "../ir/link.js";
+import { trafficOf } from "../ir/labels.js";
+import { parseDuration, writeDuration } from "../literals.js";
+import type { Token } from "../token.js";
 import { refuse, type Mutation, type TextEdit } from "./edit.js";
 
 /** What an operation needs: the model, and the trees it was parsed from. */
@@ -809,6 +812,627 @@ function stepInsertion(saga: SagaIr, source: string): number {
   if (closing < 0) return saga.span.end;
   const lineStart = source.lastIndexOf("\n", closing);
   return lineStart < 0 ? closing : lineStart + 1;
+}
+
+
+// ---- scenarios --------------------------------------------------------------
+
+/**
+ * The scenario operations.
+ *
+ * A scenario file is a sibling specification (`30-scenarios.md`) and deliberately not part of the
+ * language, but it is edited by the same front ends through the same API, for the reason section 7
+ * gives: one implementation, three front ends. Spider could fill a saga's missing `undo` by clicking
+ * the gap the view drew and could not add a single line to a scenario, which made the editing story
+ * stop at the model boundary for no reason anyone had decided.
+ *
+ * **Read from the CST, not from the lowered `ScenarioFile`**, which is why `Editable` gains nothing. A
+ * scenario file is a file whose first declaration is `scenarios for <package>`, and `buildWorkspace`
+ * parses every file into `trees` whatever its kind. The model is still needed — but for the model's
+ * own facts, which is the right dependency: a scenario references a package and sees its declarations,
+ * so what may be published and what may be expected are questions about the package.
+ *
+ * **What is derived, and what is refused.** The two things a scenario step needs that are not in the
+ * step — who sends a message, and which pipe it arrives on — are both in the model already. A publish
+ * names a sender and the pipe comes from that service's `emits` (section 3), so the senders are the
+ * services that emit it; an expectation names a pipe, and the pipes are the ones that carry it. Where
+ * exactly one answer exists it is written; where several do, the operation refuses and names them,
+ * because *which* is a decision; where none does, the operation refuses with the same code the checker
+ * would have reported after the fact. An operation that cannot write `expect-not-carried` is worth more
+ * than one that can and warns.
+ *
+ * **No payload.** A publish is written as its clause, and a message with required fields draws a
+ * warning saying the run will refuse it. The body is canonical JSON with its own normalization
+ * (`01-kernel.md` section 7) and a composer that already produces it, and accepting it as text here
+ * would make this the one operation whose output is only parseable if the caller was careful. Every
+ * operation in this module writes text that parses; that is worth more than the convenience.
+ */
+
+/** A scenario file in hand: its path, the package it references, and its tree. */
+interface ScenarioTree {
+  readonly file: string;
+  readonly pkg: string;
+  readonly root: CstNode;
+}
+
+const flatText = (n: CstNode | undefined): string =>
+  n === undefined ? "" : tokens(n).map((t) => t.text).join("");
+
+function scenarioTreesOf(editable: Editable): ScenarioTree[] {
+  const out: ScenarioTree[] = [];
+  for (const [file, root] of editable.trees) {
+    const header = childNodes(root, "ScenariosHeader")[0];
+    if (header === undefined) continue;
+    out.push({ file, pkg: flatText(childNodes(header, "QName")[0]), root });
+  }
+  return out;
+}
+
+/**
+ * The name a `scenario`, `soak` or `mockset` declaration introduces.
+ *
+ * The token after its keyword rather than `nameOf`, which looks for the first non-keyword identifier
+ * and so would skip a scenario called `State` — legal, since 7K keywords are contextual: the lexer
+ * annotates a word with its keyword and reserves nothing.
+ */
+function declaredName(decl: CstNode, ...keywords: readonly string[]): string | undefined {
+  const ts = childTokens(decl);
+  const at = ts.findIndex((t) => t.keyword !== undefined && keywords.includes(t.keyword));
+  return at < 0 ? undefined : ts[at + 1]?.text;
+}
+
+const msOf = (t: Token | undefined): number =>
+  t === undefined ? 0 : t.text === "0" ? 0 : (parseDuration(t.text) ?? 0);
+
+/**
+ * Where the clock stands after the steps a scenario already has.
+ *
+ * `at` is a point on the scenario's own clock and absolute (`30-scenarios.md` section 2), so a step
+ * appended to a scenario that has already advanced an hour has to say `at 1h` to happen where it is
+ * written. A runtime treats a point in the past as *now* rather than as an error, which is exactly what
+ * makes getting this wrong invisible: the file would say `at 0s` and the run would do it at an hour.
+ */
+function clockAfter(body: CstNode): number {
+  let now = 0;
+  for (const item of childNodes(body)) {
+    if (item.kind !== "Clause") continue;
+    // `seed 3` is a Clause with an int in it too, so the keyword decides which tokens are a clock.
+    const clock = childTokens(item).filter((t) => t.kind === "duration" || t.text === "0");
+    switch (keywordOf(item)) {
+      case "advance":
+        now += msOf(clock[0]);
+        break;
+      case "at":
+        now = Math.max(now, msOf(clock[0]));
+        break;
+      // `every 200ms for 1h publish ...` ends at the far end of its span: the last moment it published.
+      case "every":
+        now = Math.max(now, msOf(clock[1]));
+        break;
+      default:
+        break;
+    }
+  }
+  return now;
+}
+
+/** Where a step goes in a scenario, and what the clock reads when it gets there. */
+interface ScenarioSpot {
+  readonly file: string;
+  readonly pkg: string;
+  readonly at: number;
+  readonly indent: string;
+  /** Empty, or one newline when the closing brace shares a line with something else. */
+  readonly lead: string;
+  readonly clockMs: number;
+  readonly span: Span;
+}
+
+const refused = (x: ScenarioSpot | Mutation): x is Mutation => "op" in x;
+
+function locateScenario(
+  editable: Editable,
+  op: string,
+  describe: string,
+  what: { readonly scenario: string; readonly file?: string },
+): ScenarioSpot | Mutation {
+  const trees = scenarioTreesOf(editable).filter(
+    (t) => what.file === undefined || t.file === what.file,
+  );
+  if (trees.length === 0) {
+    return refuse(op, describe, [
+      error(
+        "no-scenario-file",
+        what.file === undefined
+          ? "there is no scenario file here; one starts `scenarios for <package>`"
+          : `\`${what.file}\` is not a scenario file`,
+        nowhere(what.file ?? ""),
+      ),
+    ]);
+  }
+
+  const found: { tree: ScenarioTree; decl: CstNode }[] = [];
+  for (const tree of trees) {
+    for (const decl of childNodes(tree.root)) {
+      if (decl.kind !== "ScenarioDecl" && decl.kind !== "SoakDecl") continue;
+      const name = declaredName(decl, "scenario", "soak");
+      // D40: names fold case.
+      if (name !== undefined && name.toLowerCase() === what.scenario.toLowerCase()) {
+        found.push({ tree, decl });
+      }
+    }
+  }
+
+  if (found.length === 0) {
+    return refuse(op, describe, [
+      error("no-such-scenario", `no scenario \`${what.scenario}\``, nowhere(trees[0]!.file)),
+    ]);
+  }
+  if (found.length > 1) {
+    return refuse(op, describe, [
+      error(
+        "ambiguous-scenario",
+        `\`${what.scenario}\` is declared in ${found.map((f) => `\`${f.tree.file}\``).join(" and ")}` +
+          "; name the file to say which",
+        nowhere(found[0]!.tree.file),
+      ),
+    ]);
+  }
+
+  const { tree, decl } = found[0]!;
+  const source = editable.sources[tree.file];
+  if (source === undefined) {
+    return refuse(op, describe, [
+      error("no-file", `\`${tree.file}\` has no text to add to`, nowhere(tree.file)),
+    ]);
+  }
+
+  const body = childNodes(decl, "Body")[0];
+  // The body's own braces are its direct tokens; a mock's and a payload's are inside child nodes.
+  const brace =
+    body === undefined ? undefined : childTokens(body).filter((t) => t.text === "}").at(-1);
+  if (body === undefined || brace === undefined) {
+    return refuse(op, describe, [
+      error("no-body", `\`${what.scenario}\` has no body to add to, so it did not parse`, {
+        file: tree.file,
+        start: decl.start,
+        end: decl.end,
+      }),
+    ]);
+  }
+
+  // The start of the line the closing brace is on, which is where a new last step goes. A brace
+  // sharing its line — `scenario S { }` written by hand — gets a newline in front of the step instead,
+  // since that line's start is the declaration's own.
+  const lineStart = source.lastIndexOf("\n", brace.start) + 1;
+  const ownLine = source.slice(lineStart, brace.start).trim() === "";
+
+  return {
+    file: tree.file,
+    pkg: tree.pkg,
+    at: ownLine ? lineStart : brace.start,
+    indent: indentOf(source, body),
+    lead: ownLine ? "" : "\n",
+    clockMs: clockAfter(body),
+    span: { file: tree.file, start: decl.start, end: decl.end },
+  };
+}
+
+/** The services whose `emits` would put this message on a pipe. */
+function emittersOf(model: LinkedModel, message: NodeId): ServiceIr[] {
+  const key = symbolKey(message.pkg, message.name);
+  const out: ServiceIr[] = [];
+  for (const decl of model.decls) {
+    if (decl.kind !== "service") continue;
+    const emits = decl.emits.some((e) => {
+      const id = model.resolve(e.message);
+      return id !== undefined && symbolKey(id.pkg, id.name) === key;
+    });
+    if (emits) out.push(decl);
+  }
+  return out;
+}
+
+/**
+ * The pipes this message travels on.
+ *
+ * `trafficOf` rather than a second walk over `emits` and `reacts`, for the reason D109 exported it: a
+ * scenario asserting a message on a pipe is asserting something about that one table, and an editor
+ * offering a different answer from the checker is how a front end comes to disagree with Core.
+ */
+function carriersOf(model: LinkedModel, message: NodeId): NodeId[] {
+  const key = symbolKey(message.pkg, message.name);
+  const out: NodeId[] = [];
+  for (const [pipeKey, carried] of trafficOf(model)) {
+    if (!carried.has(key)) continue;
+    const pipe = model.decls.find(
+      (d) => d.kind === "pipe" && symbolKey(d.id.pkg, d.id.name) === pipeKey,
+    );
+    if (pipe !== undefined) out.push(pipe.id);
+  }
+  return out;
+}
+
+/**
+ * `scenario X { }`, appended to a scenario file.
+ *
+ * **To an existing file, never a new one.** A `TextEdit` is a range in a file that is already there,
+ * which is what makes every mutation invertible by `invert` without an inverse per operation
+ * (`mutate/edit.ts`). Creating a file is a different shape of thing and belongs to whoever owns the
+ * tree, so a package with no scenario file is refused by name rather than guessed at.
+ *
+ * **Appended**, because a scenario file's declarations are unordered the way a package's are: a `use`
+ * finds its mockset wherever in the file it sits.
+ *
+ * **A seed is written.** `30-scenarios.md` section 2 makes reproducibility conditional on one — "under
+ * a `seed`, every nondeterministic choice draws from it" — and a conformance suite whose whole claim is
+ * that it produces the same result twice should not leave that to a runtime's default. `1` is as
+ * arbitrary as `addPipe`'s `7d` and arbitrary in the same visible way: a line somebody can change.
+ *
+ * No steps. What a scenario asserts is the scenario.
+ */
+export function addScenario(
+  editable: Editable,
+  what: {
+    /** The scenario file to add to. */
+    readonly file: string;
+    readonly name: string;
+    readonly kind?: "scenario" | "soak";
+    readonly seed?: number;
+    /** Mocksets to inherit. Each must be declared in the same file, as `use` resolves there. */
+    readonly uses?: readonly string[];
+  },
+): Mutation {
+  const kind = what.kind ?? "scenario";
+  const op = "addScenario";
+  const describe = `add ${kind} ${what.name} to ${what.file}`;
+
+  const tree = scenarioTreesOf(editable).find((t) => t.file === what.file);
+  const source = editable.sources[what.file];
+  if (tree === undefined || source === undefined) {
+    return refuse(op, describe, [
+      error(
+        "no-scenario-file",
+        `\`${what.file}\` is not a scenario file; one starts \`scenarios for <package>\``,
+        nowhere(what.file),
+      ),
+    ]);
+  }
+
+  const taken = childNodes(tree.root).some(
+    (d) =>
+      (d.kind === "ScenarioDecl" || d.kind === "SoakDecl") &&
+      declaredName(d, "scenario", "soak")?.toLowerCase() === what.name.toLowerCase(),
+  );
+  if (taken) {
+    return refuse(op, describe, [
+      error(
+        "name-taken",
+        `\`${what.file}\` already declares \`${what.name}\`, and names fold case`,
+        nowhere(what.file),
+      ),
+    ]);
+  }
+
+  const mocksets = new Set(
+    childNodes(tree.root, "MocksetDecl")
+      .map((d) => declaredName(d, "mockset")?.toLowerCase())
+      .filter((n): n is string => n !== undefined),
+  );
+  const unknown = (what.uses ?? []).filter((u) => !mocksets.has(u.toLowerCase()));
+  if (unknown.length > 0) {
+    return refuse(op, describe, [
+      error(
+        "no-such-mockset",
+        `\`${what.file}\` declares no mockset ${unknown.map((u) => `\`${u}\``).join(" or ")}` +
+          "; a `use` resolves in its own file",
+        nowhere(what.file),
+      ),
+    ]);
+  }
+
+  const seed = what.seed ?? 1;
+  const uses = (what.uses ?? []).map((u) => `  use ${u}\n`).join("");
+
+  // Appended, as `addDecl` appends to a package's file and for the same reason.
+  const needsBlank = !source.endsWith("\n\n");
+  const prefix = source.endsWith("\n") ? (needsBlank ? "\n" : "") : "\n\n";
+
+  return {
+    op,
+    describe,
+    edits: [
+      {
+        file: what.file,
+        start: source.length,
+        end: source.length,
+        text: `${prefix}${kind} ${what.name} {\n  seed ${seed}\n${uses}}\n`,
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
+/**
+ * `at 1s publish M as S`, appended to a scenario.
+ *
+ * **The sender is derived where the model leaves one answer.** Section 3: "`as <Service>` — who emitted
+ * it. The pipe comes from that service's `emits` clause, so a scenario never names one." So the senders
+ * are the services that emit the message; one of them is written, several are refused with their names,
+ * and none is refused outright, because a message nothing emits has no pipe to go on and the scenario
+ * could not run.
+ *
+ * **The clock is derived too**, from the steps already there — see `clockAfter` for why writing `at 0s`
+ * into a scenario that has advanced would be a lie a run does not report.
+ */
+export function addPublish(
+  editable: Editable,
+  what: {
+    readonly scenario: string;
+    /** Which scenario file, where more than one declares that name. */
+    readonly file?: string;
+    readonly message: string;
+    /** The sender. Derived when exactly one service emits the message. */
+    readonly as?: string;
+    /** Where on the clock. Derived from the steps already written. */
+    readonly at?: string;
+  },
+): Mutation {
+  const op = "addPublish";
+  const describe = `publish ${what.message} in ${what.scenario}`;
+  const { model } = editable;
+
+  const spot = locateScenario(editable, op, describe, what);
+  if (refused(spot)) return spot;
+
+  const message = findDecl(model, what.message, "message");
+  if (message === undefined) {
+    return refuse(op, describe, [
+      error("no-such-message", `no message \`${what.message}\``, spot.span),
+    ]);
+  }
+
+  const emitters = emittersOf(model, message.id);
+  const named = what.as === undefined ? undefined : emitters.find((e) => matches(e, what.as!));
+  if (what.as !== undefined && named === undefined) {
+    const service = findDecl(model, what.as, "service");
+    return refuse(op, describe, [
+      service === undefined
+        ? error("no-such-service", `no service \`${what.as}\``, spot.span)
+        : error(
+            "publish-not-emitted",
+            `\`${qualify(service.id)}\` does not declare \`emits ${message.id.name}\`, so there is ` +
+              "no pipe to publish it on",
+            spot.span,
+          ),
+    ]);
+  }
+  if (named === undefined && emitters.length === 0) {
+    return refuse(op, describe, [
+      error(
+        "publish-not-emitted",
+        `nothing declares \`emits ${qualify(message.id)}\`, so there is no pipe to publish it on`,
+        spot.span,
+      ),
+    ]);
+  }
+  if (named === undefined && emitters.length > 1) {
+    return refuse(op, describe, [
+      error(
+        "publish-ambiguous-sender",
+        `${emitters.map((e) => `\`${qualify(e.id)}\``).join(", ")} all emit ` +
+          `\`${message.id.name}\`; name the sender with \`as <Service>\` to say which`,
+        spot.span,
+      ),
+    ]);
+  }
+  const sender = named ?? emitters[0]!;
+
+  if (what.at !== undefined && what.at !== "0" && parseDuration(what.at) === undefined) {
+    return refuse(op, describe, [
+      error("bad-duration", `\`${what.at}\` is not a duration`, spot.span),
+    ]);
+  }
+  const at = what.at ?? writeDuration(spot.clockMs);
+
+  const messageRef = referenceTo(model, spot.pkg, message.id);
+  const senderRef = referenceTo(model, spot.pkg, sender.id);
+
+  const diagnostics: Diagnostic[] = [];
+  for (const ref of [messageRef, senderRef]) {
+    if (ref.problem !== undefined) diagnostics.push(warn("needs-import", ref.problem, spot.span));
+  }
+
+  // A body is not written (see the section note), so a message that needs one says so here rather
+  // than at run time. `unchecked` is named because it is the other honest answer.
+  const required =
+    message.kind === "message" ? message.fields.filter((f) => !f.optional).map((f) => f.name) : [];
+  if (required.length > 0) {
+    diagnostics.push(
+      warn(
+        "publish-without-body",
+        `\`${message.id.name}\` requires ${required.map((n) => `\`${n}\``).join(", ")}, so a run ` +
+          "refuses this publish until a body is written — or `unchecked`, to send it anyway",
+        spot.span,
+      ),
+    );
+  }
+
+  return {
+    op,
+    describe,
+    edits: [
+      {
+        file: spot.file,
+        start: spot.at,
+        end: spot.at,
+        text: `${spot.lead}${spot.indent}at ${at} publish ${messageRef.text} as ${senderRef.text}\n`,
+      },
+    ],
+    diagnostics,
+  };
+}
+
+/**
+ * `expect M on p`, appended to a scenario.
+ *
+ * **The pipe is derived from the same table the checker reads.** Where exactly one pipe carries the
+ * message it is written; where several do, *which* is the assertion and the operation refuses with
+ * their names; where none does, it refuses with `expect-not-carried` — the code the checker would
+ * report on the line this would have written. An operation that cannot write a diagnostic is better
+ * than one that writes it and warns.
+ *
+ * **Except when negated.** `expect no M on p` where the model forbids `M` on `p` is not vacuous and is
+ * the point of having it: scenarios run against real implementations (section 7.8), and one that
+ * published it anyway is what the assertion is there to catch (D109). So the negated form takes any
+ * pipe, and only asks to be told which when the model does not name one for it.
+ */
+export function addExpect(
+  editable: Editable,
+  what: {
+    readonly scenario: string;
+    readonly file?: string;
+    readonly message: string;
+    /** Derived when exactly one pipe carries the message. */
+    readonly pipe?: string;
+    readonly negated?: boolean;
+    /** `count n` — exactly this many, cumulative over the run (section 5). */
+    readonly count?: number;
+  },
+): Mutation {
+  const op = "addExpect";
+  const negated = what.negated ?? false;
+  const describe = `expect ${negated ? "no " : ""}${what.message} in ${what.scenario}`;
+  const { model } = editable;
+
+  const spot = locateScenario(editable, op, describe, what);
+  if (refused(spot)) return spot;
+
+  const message = findDecl(model, what.message, "message");
+  if (message === undefined) {
+    return refuse(op, describe, [
+      error("no-such-message", `no message \`${what.message}\``, spot.span),
+    ]);
+  }
+
+  const carriers = carriersOf(model, message.id);
+  const named = what.pipe === undefined ? undefined : findDecl(model, what.pipe, "pipe");
+  if (what.pipe !== undefined) {
+    if (named === undefined) {
+      return refuse(op, describe, [error("no-such-pipe", `no pipe \`${what.pipe}\``, spot.span)]);
+    }
+    const key = symbolKey(named.id.pkg, named.id.name);
+    if (!negated && !carriers.some((c) => symbolKey(c.pkg, c.name) === key)) {
+      return refuse(op, describe, [
+        error(
+          "expect-not-carried",
+          `nothing puts \`${qualify(message.id)}\` on \`${qualify(named.id)}\`, so this expectation ` +
+            "cannot be met by any implementation that follows the model",
+          spot.span,
+        ),
+      ]);
+    }
+  } else if (carriers.length === 0) {
+    return refuse(op, describe, [
+      negated
+        ? error(
+            "expect-needs-pipe",
+            `nothing puts \`${qualify(message.id)}\` on any pipe, so an assertion that it is absent ` +
+              "has to name the pipe it is absent from",
+            spot.span,
+          )
+        : error(
+            "expect-not-carried",
+            `nothing puts \`${qualify(message.id)}\` on any pipe, so this expectation cannot be met ` +
+              "by any implementation that follows the model",
+            spot.span,
+          ),
+    ]);
+  } else if (carriers.length > 1) {
+    return refuse(op, describe, [
+      error(
+        "expect-ambiguous-pipe",
+        `\`${message.id.name}\` travels on ${carriers.map((c) => `\`${qualify(c)}\``).join(", ")}` +
+          "; which one is the assertion, so name it",
+        spot.span,
+      ),
+    ]);
+  }
+  const pipe = named?.id ?? carriers[0]!;
+
+  const messageRef = referenceTo(model, spot.pkg, message.id);
+  const pipeRef = referenceTo(model, spot.pkg, pipe);
+
+  const diagnostics: Diagnostic[] = [];
+  for (const ref of [messageRef, pipeRef]) {
+    if (ref.problem !== undefined) diagnostics.push(warn("needs-import", ref.problem, spot.span));
+  }
+
+  // `count 0` is `no` spelled differently (section 5), so the two together are two answers to one
+  // question. The explicit form is written and the redundancy is said rather than resolved silently.
+  const redundant = negated && what.count !== undefined && what.count !== 0;
+  const count = what.count === undefined || (negated && what.count === 0) ? "" : ` count ${what.count}`;
+  if (redundant) {
+    diagnostics.push(
+      warn(
+        "negated-with-count",
+        "`expect no M` is `count 0`, so a count beside it is a second answer to the same question",
+        spot.span,
+      ),
+    );
+  }
+
+  return {
+    op,
+    describe,
+    edits: [
+      {
+        file: spot.file,
+        start: spot.at,
+        end: spot.at,
+        text:
+          `${spot.lead}${spot.indent}expect ${negated ? "no " : ""}${messageRef.text} ` +
+          `on ${pipeRef.text}${count}\n`,
+      },
+    ],
+    diagnostics,
+  };
+}
+
+/**
+ * `advance 1s`, appended to a scenario.
+ *
+ * The third thing a scenario body holds, and the one that makes a timeout reachable: the engine drains
+ * what is due and then jumps the clock, so nothing is waited on (section 2). Written rather than
+ * derived, since how long to wait is the question being asked.
+ */
+export function addAdvance(
+  editable: Editable,
+  what: { readonly scenario: string; readonly file?: string; readonly by: string },
+): Mutation {
+  const op = "addAdvance";
+  const describe = `advance ${what.by} in ${what.scenario}`;
+
+  const spot = locateScenario(editable, op, describe, what);
+  if (refused(spot)) return spot;
+
+  if (parseDuration(what.by) === undefined) {
+    return refuse(op, describe, [error("bad-duration", `\`${what.by}\` is not a duration`, spot.span)]);
+  }
+
+  return {
+    op,
+    describe,
+    edits: [
+      {
+        file: spot.file,
+        start: spot.at,
+        end: spot.at,
+        text: `${spot.lead}${spot.indent}advance ${what.by}\n`,
+      },
+    ],
+    diagnostics: [],
+  };
 }
 
 

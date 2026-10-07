@@ -79,6 +79,13 @@ pipe get tested at all.
 `unchecked` is present. A harness that only permits valid input cannot test the interesting half of the
 system.
 
+**A publish the model cannot route is reported before the run.** `publish <Message>` where nothing
+declares `emits <Message>`, or `publish <Message> as <Service>` where that service does not emit it, is
+`publish-not-emitted` — a warning, on the same grounds as `expect-not-carried` in section 5: the fix may
+be the missing `emits` rather than the publish. It matters more than the expectation case, because a
+publish that cannot route does not fail an assertion; it stops the scenario from starting, which is the
+one outcome that says nothing at all about the system under test.
+
 ## 4. Mocks
 
 Every service is **mocked** (scripted here) or **live** (a real handler, where an implementation supplies
@@ -233,6 +240,10 @@ expectation. `expect no <Message> on <pipe>` draws nothing even where the model 
 run against real implementations (section 7.8), and an implementation that published it anyway is
 exactly what that assertion is there to catch. A `.dead` suffix is read against the pipe it belongs to,
 since anything a pipe carries can end up in its dead letters.
+
+**An editor writes these through Core's mutation API.** `addPublish` and `addExpect` (`20-ir.md`
+section 7) derive the sender and the pipe from the model, so the two diagnostics above are things a
+graph editor cannot write rather than things it writes and then warns about.
 
 The pair that makes a saga trustworthy is `expect no <CompensatingCommand>` alongside its opposite:
 compensation must run for a step that completed and must **not** run for one that did not

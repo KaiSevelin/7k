@@ -13,7 +13,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  addAdvance,
+  addExpect,
   addPipe,
+  addPublish,
+  addScenario,
   addService,
   apply,
   applyAll,
@@ -828,5 +832,389 @@ describe("a saga's ending", () => {
       source,
     );
     expect((after.match(/[^\r]\n/g) ?? []).length).toBe(0);
+  });
+});
+
+/**
+ * The scenario operations.
+ *
+ * A scenario file is a sibling specification and not part of the language, and is edited through the
+ * same API for the reason everything is: one implementation, three front ends. So the same four
+ * properties apply, and `check` asserts two of them over every mutation here as it does everywhere
+ * else.
+ *
+ * What is specific to these is the pair of derivations: a publish's sender comes from the model's
+ * `emits` and an expectation's pipe from the traffic table the checker reads. Those are asserted as
+ * properties — *the operation cannot write a line the checker would complain about* — rather than as
+ * the exact text, since the text is the part that may reasonably change.
+ */
+
+const SHOP = `package shop
+
+message PlaceOrder v1.0 @command {
+  orderId: uuid @role(businessKey)
+}
+
+message Reorder v1.0 @command {
+  orderId: uuid @role(businessKey)
+}
+
+message OrderPlaced v1.0 @event {
+  orderId: uuid @role(businessKey)
+}
+
+// Emitted to two pipes, so "which one is the assertion" has to be asked.
+message Audited v1.0 @event {
+  orderId: uuid @role(businessKey)
+  note: string?
+}
+
+// Emitted by nothing and carried by nothing: the message every refusal is about.
+message Ignored v1.0 @event {
+  orderId: uuid @role(businessKey)
+}
+
+pipe inbound : queue { retention 7d }
+pipe events  : topic { retention 7d }
+pipe audit   : topic { retention 7d }
+
+service Storefront @external {
+  emits PlaceOrder to inbound
+  emits Reorder    to inbound
+}
+
+// A second sender for Reorder, and only for Reorder.
+service Kiosk @external {
+  emits Reorder to inbound
+}
+
+service OrderService {
+  reacts PlaceOrder from inbound { replies OrderPlaced }
+  reacts Reorder    from inbound { replies OrderPlaced }
+  emits  OrderPlaced to events
+  emits  Audited     to events
+  emits  Audited     to audit
+}
+
+service Ledger {
+  reacts OrderPlaced from events { replies none }
+}
+`;
+
+const SHOP_SCENARIOS = `// Scenarios for shop. A sibling specification (30-scenarios.md).
+scenarios for shop
+
+mockset Base {
+  mock OrderService {
+    on PlaceOrder reply OrderPlaced
+  }
+}
+
+scenario Baseline {
+  seed 1
+  use  Base
+
+  at 0s publish PlaceOrder as Storefront
+  advance 1s
+  expect OrderPlaced on events
+}
+
+// Nothing on the clock yet.
+scenario Fresh {
+  seed 2
+}
+`;
+
+const SCEN_FILES = { "shop.7k": SHOP, "shop.scenario.7k": SHOP_SCENARIOS };
+
+/** The mutation, applied, with the whole file set back. */
+const applyIn = (
+  mutation: Mutation,
+  files: Readonly<Record<string, string>> = SCEN_FILES,
+): Record<string, string> => {
+  expect(mutation.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+  expect(mutation.edits.length).toBeGreaterThan(0);
+  return check(files, mutation);
+};
+
+/** Property 1, as a property: what was written parses, and the checker has nothing new to say. */
+const stillChecks = (files: Readonly<Record<string, string>>): string[] => {
+  const ws = buildWorkspace(Object.entries(files).map(([path, source]) => ({ path, source })));
+  return ws.diagnostics
+    .filter((d) => d.severity === "error")
+    .map((d) => `${d.code}: ${d.message}`);
+};
+
+const scen = (files: Readonly<Record<string, string>> = SCEN_FILES): Editable => editable(files);
+
+describe("adding a scenario", () => {
+  it("appends one with a seed, and it parses", () => {
+    const mutation = addScenario(scen(), { file: "shop.scenario.7k", name: "Extra" });
+    const after = applyIn(mutation);
+    expect(after["shop.scenario.7k"]).toContain("scenario Extra {");
+    expect(after["shop.scenario.7k"]).toContain("seed 1");
+    expect(stillChecks(after)).toEqual([]);
+  });
+
+  it("inherits the mocksets it is told to, and refuses one the file has not got", () => {
+    const after = applyIn(
+      addScenario(scen(), { file: "shop.scenario.7k", name: "Extra", uses: ["Base"] }),
+    );
+    expect(after["shop.scenario.7k"]).toContain("use Base");
+    expect(stillChecks(after)).toEqual([]);
+
+    const bad = addScenario(scen(), { file: "shop.scenario.7k", name: "Extra", uses: ["Nope"] });
+    expect(bad.edits).toEqual([]);
+    expect(bad.diagnostics[0]?.code).toBe("no-such-mockset");
+  });
+
+  it("writes a soak when asked for one", () => {
+    const after = applyIn(
+      addScenario(scen(), { file: "shop.scenario.7k", name: "UnderLoad", kind: "soak" }),
+    );
+    expect(after["shop.scenario.7k"]).toContain("soak UnderLoad {");
+  });
+
+  it("refuses a model file, which is not a scenario file", () => {
+    const mutation = addScenario(scen(), { file: "shop.7k", name: "Extra" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("no-scenario-file");
+  });
+
+  it("refuses a name the file already has, folding case (D40)", () => {
+    const mutation = addScenario(scen(), { file: "shop.scenario.7k", name: "baseline" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("name-taken");
+  });
+});
+
+describe("adding a publish", () => {
+  it("derives the sender from the model's `emits`", () => {
+    const after = applyIn(addPublish(scen(), { scenario: "Fresh", message: "PlaceOrder" }));
+    expect(after["shop.scenario.7k"]).toContain("publish PlaceOrder as Storefront");
+    expect(stillChecks(after)).toEqual([]);
+  });
+
+  it("derives where it sits on the clock from the steps already there", () => {
+    // `Baseline` publishes at 0s and then advances a second, so a step appended to it happens at 1s.
+    // Writing `at 0s` would be a line a run does not contradict: a point in the past happens now.
+    const after = applyIn(addPublish(scen(), { scenario: "Baseline", message: "PlaceOrder" }));
+    expect(after["shop.scenario.7k"]).toContain("at 1s publish PlaceOrder");
+    // And an untouched scenario starts at zero.
+    const fresh = applyIn(addPublish(scen(), { scenario: "Fresh", message: "PlaceOrder" }));
+    expect(fresh["shop.scenario.7k"]).toContain("at 0s publish PlaceOrder");
+  });
+
+  it("takes the point on the clock when it is given one", () => {
+    const after = applyIn(
+      addPublish(scen(), { scenario: "Fresh", message: "PlaceOrder", at: "90m" }),
+    );
+    expect(after["shop.scenario.7k"]).toContain("at 90m publish");
+  });
+
+  it("refuses to choose between two senders, and names them", () => {
+    const mutation = addPublish(scen(), { scenario: "Fresh", message: "Reorder" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("publish-ambiguous-sender");
+    expect(mutation.diagnostics[0]?.message).toContain("Storefront");
+    expect(mutation.diagnostics[0]?.message).toContain("Kiosk");
+  });
+
+  it("writes the one it is told to, out of several", () => {
+    const after = applyIn(
+      addPublish(scen(), { scenario: "Fresh", message: "Reorder", as: "Kiosk" }),
+    );
+    expect(after["shop.scenario.7k"]).toContain("publish Reorder as Kiosk");
+    expect(stillChecks(after)).toEqual([]);
+  });
+
+  it("refuses a message nothing emits, since there is no pipe for it", () => {
+    const mutation = addPublish(scen(), { scenario: "Fresh", message: "Ignored" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("publish-not-emitted");
+  });
+
+  it("refuses a sender that does not emit it, by name", () => {
+    const mutation = addPublish(scen(), {
+      scenario: "Fresh",
+      message: "PlaceOrder",
+      as: "OrderService",
+    });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("publish-not-emitted");
+    expect(mutation.diagnostics[0]?.message).toContain("OrderService");
+  });
+
+  it("says that a message with required fields needs a body", () => {
+    const mutation = addPublish(scen(), { scenario: "Fresh", message: "PlaceOrder" });
+    const said = mutation.diagnostics.find((d) => d.code === "publish-without-body");
+    expect(said?.severity).toBe("warning");
+    expect(said?.message).toContain("orderId");
+    expect(said?.message).toContain("unchecked");
+    // Said, not refused: the edit is still offered.
+    expect(mutation.edits.length).toBe(1);
+  });
+
+  it("refuses a duration that is not one", () => {
+    const mutation = addPublish(scen(), { scenario: "Fresh", message: "PlaceOrder", at: "soon" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("bad-duration");
+  });
+});
+
+describe("adding an expectation", () => {
+  it("derives the pipe from the traffic table the checker reads", () => {
+    const after = applyIn(addExpect(scen(), { scenario: "Fresh", message: "OrderPlaced" }));
+    expect(after["shop.scenario.7k"]).toContain("expect OrderPlaced on events");
+    expect(stillChecks(after)).toEqual([]);
+  });
+
+  it("cannot write `expect-not-carried`, which is the point of deriving it", () => {
+    // The code is the one `check-scenarios` would have reported on the line this would have written.
+    const mutation = addExpect(scen(), { scenario: "Fresh", message: "Ignored" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("expect-not-carried");
+  });
+
+  it("refuses a pipe the message does not travel on", () => {
+    const mutation = addExpect(scen(), {
+      scenario: "Fresh",
+      message: "OrderPlaced",
+      pipe: "audit",
+    });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("expect-not-carried");
+  });
+
+  it("lets the negated form name any pipe, because that assertion is a guard (D109)", () => {
+    const after = applyIn(
+      addExpect(scen(), {
+        scenario: "Fresh",
+        message: "OrderPlaced",
+        pipe: "audit",
+        negated: true,
+      }),
+    );
+    expect(after["shop.scenario.7k"]).toContain("expect no OrderPlaced on audit");
+    // And the checker agrees: the negated form draws nothing.
+    expect(stillChecks(after)).toEqual([]);
+  });
+
+  it("refuses to choose between two pipes, and names them", () => {
+    const mutation = addExpect(scen(), { scenario: "Fresh", message: "Audited" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("expect-ambiguous-pipe");
+    expect(mutation.diagnostics[0]?.message).toContain("events");
+    expect(mutation.diagnostics[0]?.message).toContain("audit");
+  });
+
+  it("asks for a pipe when the negated form has nothing to derive one from", () => {
+    const mutation = addExpect(scen(), { scenario: "Fresh", message: "Ignored", negated: true });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("expect-needs-pipe");
+  });
+
+  it("writes a count", () => {
+    const after = applyIn(
+      addExpect(scen(), { scenario: "Fresh", message: "OrderPlaced", count: 2 }),
+    );
+    expect(after["shop.scenario.7k"]).toContain("expect OrderPlaced on events count 2");
+  });
+
+  it("says that a count beside `no` is a second answer to one question", () => {
+    const mutation = addExpect(scen(), {
+      scenario: "Fresh",
+      message: "OrderPlaced",
+      pipe: "events",
+      negated: true,
+      count: 3,
+    });
+    expect(mutation.diagnostics.map((d) => d.code)).toContain("negated-with-count");
+  });
+});
+
+describe("adding an advance", () => {
+  it("writes one, and it parses", () => {
+    const after = applyIn(addAdvance(scen(), { scenario: "Fresh", by: "30s" }));
+    expect(after["shop.scenario.7k"]).toContain("advance 30s");
+    expect(stillChecks(after)).toEqual([]);
+  });
+
+  it("refuses something that is not a duration", () => {
+    const mutation = addAdvance(scen(), { scenario: "Fresh", by: "a while" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("bad-duration");
+  });
+});
+
+describe("where a scenario step lands", () => {
+  it("goes last inside the body, after the steps already there", () => {
+    const after = applyIn(addAdvance(scen(), { scenario: "Baseline", by: "5s" }))[
+      "shop.scenario.7k"
+    ]!;
+    expect(after.indexOf("advance 5s")).toBeGreaterThan(after.indexOf("expect OrderPlaced"));
+    // Inside `Baseline`, not after it.
+    expect(after.indexOf("advance 5s")).toBeLessThan(after.indexOf("scenario Fresh"));
+  });
+
+  it("takes the indentation the body already uses", () => {
+    const wide = SHOP_SCENARIOS.replace("  seed 2", "    seed 2");
+    const files = { ...SCEN_FILES, "shop.scenario.7k": wide };
+    const after = applyIn(addAdvance(scen(files), { scenario: "Fresh", by: "5s" }), files);
+    expect(after["shop.scenario.7k"]).toContain("\n    advance 5s\n");
+  });
+
+  it("handles a body written on one line", () => {
+    const terse = `${SHOP_SCENARIOS}\nscenario Terse { }\n`;
+    const files = { ...SCEN_FILES, "shop.scenario.7k": terse };
+    const after = applyIn(addAdvance(scen(files), { scenario: "Terse", by: "5s" }), files);
+    expect(stillChecks(after)).toEqual([]);
+    expect(after["shop.scenario.7k"]).toContain("advance 5s");
+  });
+
+  it("refuses a scenario that is not there", () => {
+    const mutation = addAdvance(scen(), { scenario: "Nope", by: "5s" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("no-such-scenario");
+  });
+
+  it("refuses when two files declare the name, and says to pick one", () => {
+    const second = SHOP_SCENARIOS.replace("mockset Base", "mockset Other").replace(
+      "use  Base",
+      "use  Other",
+    );
+    const files = { ...SCEN_FILES, "more.scenario.7k": second };
+    const mutation = addAdvance(scen(files), { scenario: "Fresh", by: "5s" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("ambiguous-scenario");
+
+    // And takes the file when it is told which.
+    const after = applyIn(
+      addAdvance(scen(files), { scenario: "Fresh", file: "more.scenario.7k", by: "5s" }),
+      files,
+    );
+    expect(after["more.scenario.7k"]).toContain("advance 5s");
+    expect(after["shop.scenario.7k"]).toBe(SHOP_SCENARIOS);
+  });
+
+  it("splices into a CRLF scenario file without mixing endings", () => {
+    const crlf = SHOP_SCENARIOS.replace(/\n/g, "\r\n");
+    const files = { ...SCEN_FILES, "shop.scenario.7k": crlf };
+    // `applyAll` rather than `check`: `apply` rewrites an insertion's endings to the file's own, so
+    // the spliced bytes are deliberately not the edit's, and property 2 holds on LF files.
+    const mutation = addExpect(scen(files), { scenario: "Fresh", message: "OrderPlaced" });
+    const after = applyAll(files, mutation.edits);
+    expect((after["shop.scenario.7k"]!.match(/[^\r]\n/g) ?? []).length).toBe(0);
+    expect(after["shop.scenario.7k"]).toContain("expect OrderPlaced on events");
+  });
+
+  it("round-trips through the IR: the step is there, and it is a publish", () => {
+    const after = applyIn(addPublish(scen(), { scenario: "Fresh", message: "PlaceOrder" }));
+    const ws = buildWorkspace(
+      Object.entries(after).map(([path, source]) => ({ path, source })),
+    );
+    const fresh = ws.scenarios[0]?.scenarios.find((s) => s.name === "Fresh");
+    expect(fresh?.steps.map((s) => s.s)).toEqual(["publish"]);
+    expect(fresh?.steps[0]?.s === "publish" && fresh.steps[0].publish.as).toBe("Storefront");
   });
 });

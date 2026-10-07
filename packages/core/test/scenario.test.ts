@@ -408,3 +408,35 @@ describe("an expectation the model cannot satisfy", () => {
     expect(one("  advance 1s\n  expect Nope on commands.dead")).toContain("expect-not-carried");
   });
 });
+
+/**
+ * A publish the model cannot route, which is the other half of the same question.
+ *
+ * `as <Service>` names who sent it and the pipe comes from that service's `emits` (section 3), so a
+ * message nothing emits has nowhere to go. A runtime reports it as the scenario failing to start,
+ * which is the one outcome that says nothing about the system under test.
+ */
+describe("a publish the model cannot route", () => {
+  const one = (body: string): string[] =>
+    ws(`scenarios for p\n\nscenario S {\n${body}\n}\n`).diagnostics.map((d) => d.code);
+
+  it("is reported when nothing emits the message", () => {
+    expect(one("  publish Nope")).toContain("publish-not-emitted");
+  });
+
+  it("says nothing when something does", () => {
+    expect(one("  publish Done")).not.toContain("publish-not-emitted");
+    expect(one("  publish Go as Caller")).not.toContain("publish-not-emitted");
+  });
+
+  it("is about the named sender when one is named", () => {
+    // `Done` is emitted — by `S`, and `Caller` is not `S`.
+    expect(one("  publish Done as Caller")).toContain("publish-not-emitted");
+  });
+
+  it("leaves an unresolved name to the one diagnostic that already covers it", () => {
+    const codes = one("  publish Done as Ghost");
+    expect(codes).toContain("unresolved-reference");
+    expect(codes).not.toContain("publish-not-emitted");
+  });
+});
