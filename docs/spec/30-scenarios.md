@@ -243,7 +243,10 @@ since anything a pipe carries can end up in its dead letters.
 
 **An editor writes these through Core's mutation API.** `addPublish` and `addExpect` (`20-ir.md`
 section 7) derive the sender and the pipe from the model, so the two diagnostics above are things a
-graph editor cannot write rather than things it writes and then warns about.
+graph editor cannot write rather than things it writes and then warns about. Both take a body as
+canonical JSON text and run it through the body parser before writing it, so a payload that cannot be
+read is refused rather than spliced into a file — `JSON.parse` would be the wrong check, since a key
+may be written bare and `$auto` is a directive.
 
 The pair that makes a saga trustworthy is `expect no <CompensatingCommand>` alongside its opposite:
 compensation must run for a step that completed and must **not** run for one that did not

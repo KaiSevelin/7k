@@ -159,3 +159,4 @@ function memberKey(m: CstNode): string | undefined {
   if (tok === undefined) return undefined;
   return tok.kind === "string" ? (JSON.parse(tok.text) as string) : tok.text;
 }
+

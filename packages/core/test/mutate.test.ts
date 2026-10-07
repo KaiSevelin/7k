@@ -1580,3 +1580,107 @@ describe("rename", () => {
     });
   });
 });
+
+/**
+ * A body on a scenario step.
+ *
+ * The first version of these operations refused one, on the grounds that a body is canonical JSON and
+ * accepting it as text would make them the only operations whose output parses if the caller was
+ * careful. `readJsonBody` answers that: the text goes through the real lexer and the real body parser,
+ * so it is checked rather than trusted. These assert both halves — that a legal body is written, and
+ * that an illegal one is refused with the parser's own reason.
+ */
+describe("a body on a scenario step", () => {
+  const body = '{\n  orderId: "ORD-1"\n}';
+
+  it("is written under the clause, indented one level further", () => {
+    const after = applyIn(
+      addPublish(scen(), { scenario: "Fresh", message: "PlaceOrder", payload: body }),
+    )["shop.scenario.7k"]!;
+    expect(after).toContain("at 0s publish PlaceOrder as Storefront\n");
+    expect(after).toContain('    {\n      orderId: "ORD-1"\n    }\n');
+    expect(stillChecks({ ...SCEN_FILES, "shop.scenario.7k": after })).toEqual([]);
+  });
+
+  it("stops the warning about a message that needed one", () => {
+    const plain = addPublish(scen(), { scenario: "Fresh", message: "PlaceOrder" });
+    expect(plain.diagnostics.map((d) => d.code)).toContain("publish-without-body");
+    const withBody = addPublish(scen(), {
+      scenario: "Fresh",
+      message: "PlaceOrder",
+      payload: body,
+    });
+    expect(withBody.diagnostics.map((d) => d.code)).not.toContain("publish-without-body");
+  });
+
+  it("takes a bare key, which JSON would not", () => {
+    // `01-kernel.md` 7: a key may be written bare, so `JSON.parse` is the wrong check.
+    const mutation = addPublish(scen(), {
+      scenario: "Fresh",
+      message: "PlaceOrder",
+      payload: '{ orderId: "ORD-1" }',
+    });
+    expect(mutation.edits.length).toBe(1);
+  });
+
+  it("refuses one that cannot be read, with the reason", () => {
+    const mutation = addPublish(scen(), {
+      scenario: "Fresh",
+      message: "PlaceOrder",
+      payload: '{ orderId: }',
+    });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("bad-payload");
+  });
+
+  it("refuses a second value behind the first", () => {
+    const mutation = addPublish(scen(), {
+      scenario: "Fresh",
+      message: "PlaceOrder",
+      payload: '{ orderId: "A" } { orderId: "B" }',
+    });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("bad-payload");
+  });
+
+  it("narrows an expectation, partially by default", () => {
+    const after = applyIn(
+      addExpect(scen(), { scenario: "Fresh", message: "OrderPlaced", payload: body }),
+    )["shop.scenario.7k"]!;
+    expect(after).toContain("expect OrderPlaced on events\n");
+    expect(after).not.toContain("exactly");
+    expect(stillChecks({ ...SCEN_FILES, "shop.scenario.7k": after })).toEqual([]);
+  });
+
+  it("writes `exactly` when that is what is meant", () => {
+    const after = applyIn(
+      addExpect(scen(), {
+        scenario: "Fresh",
+        message: "OrderPlaced",
+        payload: body,
+        exact: true,
+      }),
+    )["shop.scenario.7k"]!;
+    expect(after).toContain("on events exactly\n");
+    expect(stillChecks({ ...SCEN_FILES, "shop.scenario.7k": after })).toEqual([]);
+  });
+
+  it("refuses a body beside `no`, since the two mean opposite things", () => {
+    const mutation = addExpect(scen(), {
+      scenario: "Fresh",
+      message: "OrderPlaced",
+      negated: true,
+      payload: body,
+    });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("negated-with-body");
+  });
+
+  it("keeps a count behind the body", () => {
+    const after = applyIn(
+      addExpect(scen(), { scenario: "Fresh", message: "OrderPlaced", payload: body, count: 2 }),
+    )["shop.scenario.7k"]!;
+    expect(after).toContain("} count 2");
+    expect(stillChecks({ ...SCEN_FILES, "shop.scenario.7k": after })).toEqual([]);
+  });
+});

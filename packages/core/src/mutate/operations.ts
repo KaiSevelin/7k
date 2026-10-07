@@ -36,6 +36,7 @@ import {
 import { referenceSites, type LinkedModel } from "../ir/link.js";
 import { trafficOf } from "../ir/labels.js";
 import { parseDuration, writeDuration } from "../literals.js";
+import { readJsonBody } from "../parser/body.js";
 import type { Token } from "../token.js";
 import { refuse, type Mutation, type TextEdit } from "./edit.js";
 
@@ -1295,11 +1296,13 @@ export function removePipe(editable: Editable, what: { readonly pipe: string }):
  * would have reported after the fact. An operation that cannot write `expect-not-carried` is worth more
  * than one that can and warns.
  *
- * **No payload.** A publish is written as its clause, and a message with required fields draws a
- * warning saying the run will refuse it. The body is canonical JSON with its own normalization
- * (`01-kernel.md` section 7) and a composer that already produces it, and accepting it as text here
- * would make this the one operation whose output is only parseable if the caller was careful. Every
- * operation in this module writes text that parses; that is worth more than the convenience.
+ * **A payload is text, and it is checked rather than trusted.** The first version of this refused one
+ * outright: a body is canonical JSON with its own normalization (`01-kernel.md` section 7), and
+ * accepting it as text would have made this the one operation whose output is only parseable if the
+ * caller was careful. That was right about the requirement and wrong about the options —
+ * `readJsonBody` runs the real lexer and the real body parser, so the text is *verified* rather than
+ * declined, and the invariant that every operation writes text that parses holds either way. Without
+ * a body, every publish written from an editor is one a run refuses, which is a poor thing to ship.
  */
 
 /** A scenario file in hand: its path, the package it references, and its tree. */
@@ -1616,6 +1619,24 @@ export function addScenario(
 }
 
 /**
+ * A body laid out under the clause it belongs to, at one more level of indent.
+ *
+ * The text's own line breaks are kept and only the indentation is replaced, because a composer that
+ * laid a nested record out over several lines meant that, and reflowing it here would be this module
+ * reformatting somebody else's text.
+ */
+function bodyUnder(payload: string, indent: string): string {
+  const lines = payload.replace(/\r\n/g, "\n").trimEnd().split("\n");
+  return lines.map((line) => `${indent}  ${line.trimEnd()}`).join("\n");
+}
+
+/** A body that does not parse is refused, with the parser's own reason. */
+function badBody(payload: string): string | undefined {
+  const read = readJsonBody(payload);
+  return "problem" in read ? read.problem : undefined;
+}
+
+/**
  * `at 1s publish M as S`, appended to a scenario.
  *
  * **The sender is derived where the model leaves one answer.** Section 3: "`as <Service>` — who emitted
@@ -1638,6 +1659,13 @@ export function addPublish(
     readonly as?: string;
     /** Where on the clock. Derived from the steps already written. */
     readonly at?: string;
+    /**
+     * The body, as canonical JSON text — what a composer produces.
+     *
+     * Checked by the body parser before anything is written, so a payload that cannot be read is
+     * refused rather than spliced into a file.
+     */
+    readonly payload?: string;
   },
 ): Mutation {
   const op = "addPublish";
@@ -1697,6 +1725,16 @@ export function addPublish(
   }
   const at = what.at ?? writeDuration(spot.clockMs);
 
+  const payload = what.payload?.trim();
+  if (payload !== undefined && payload !== "") {
+    const problem = badBody(payload);
+    if (problem !== undefined) {
+      return refuse(op, describe, [
+        error("bad-payload", `that body cannot be read: ${problem}`, spot.span),
+      ]);
+    }
+  }
+
   const messageRef = referenceTo(model, spot.pkg, message.id);
   const senderRef = referenceTo(model, spot.pkg, sender.id);
 
@@ -1705,10 +1743,12 @@ export function addPublish(
     if (ref.problem !== undefined) diagnostics.push(warn("needs-import", ref.problem, spot.span));
   }
 
-  // A body is not written (see the section note), so a message that needs one says so here rather
-  // than at run time. `unchecked` is named because it is the other honest answer.
+  // A message that needs a body and was given none says so here rather than at run time.
+  // `unchecked` is named because it is the other honest answer.
   const required =
-    message.kind === "message" ? message.fields.filter((f) => !f.optional).map((f) => f.name) : [];
+    message.kind === "message" && (payload === undefined || payload === "")
+      ? message.fields.filter((f) => !f.optional).map((f) => f.name)
+      : [];
   if (required.length > 0) {
     diagnostics.push(
       warn(
@@ -1728,7 +1768,9 @@ export function addPublish(
         file: spot.file,
         start: spot.at,
         end: spot.at,
-        text: `${spot.lead}${spot.indent}at ${at} publish ${messageRef.text} as ${senderRef.text}\n`,
+        text:
+          `${spot.lead}${spot.indent}at ${at} publish ${messageRef.text} as ${senderRef.text}` +
+          (payload === undefined || payload === "" ? "\n" : `\n${bodyUnder(payload, spot.indent)}\n`),
       },
     ],
     diagnostics,
@@ -1760,6 +1802,15 @@ export function addExpect(
     readonly negated?: boolean;
     /** `count n` — exactly this many, cumulative over the run (section 5). */
     readonly count?: number;
+    /**
+     * `{ fields }` — the body to compare against, as canonical JSON text.
+     *
+     * **Partial by default**, which is section 5's own default and not a shortcut: asserting every
+     * field makes a scenario brittle to additive changes, and additive changes are explicitly
+     * non-breaking (`02-contract.md` 5.2). `exact` is for when you mean that nothing else changed.
+     */
+    readonly payload?: string;
+    readonly exact?: boolean;
   },
 ): Mutation {
   const op = "addExpect";
@@ -1822,6 +1873,16 @@ export function addExpect(
   }
   const pipe = named?.id ?? carriers[0]!;
 
+  const payload = what.payload?.trim();
+  if (payload !== undefined && payload !== "") {
+    const problem = badBody(payload);
+    if (problem !== undefined) {
+      return refuse(op, describe, [
+        error("bad-payload", `that body cannot be read: ${problem}`, spot.span),
+      ]);
+    }
+  }
+
   const messageRef = referenceTo(model, spot.pkg, message.id);
   const pipeRef = referenceTo(model, spot.pkg, pipe);
 
@@ -1844,6 +1905,25 @@ export function addExpect(
     );
   }
 
+  // `expect no M on p { fields }` is a contradiction in the making: the body narrows what counts as a
+  // match, and "none of the ones that look like this" is a claim nobody can read at a glance. Refused
+  // rather than written, since the two halves mean opposite things.
+  if (negated && payload !== undefined && payload !== "") {
+    return refuse(op, describe, [
+      error(
+        "negated-with-body",
+        "a body narrows what counts as a match, so `no` beside one asks whether none of a particular " +
+          "shape arrived — write the plain `no`, or drop the `no` and assert the shape",
+        spot.span,
+      ),
+    ]);
+  }
+
+  const body =
+    payload === undefined || payload === ""
+      ? ""
+      : `${what.exact === true ? " exactly" : ""}\n${bodyUnder(payload, spot.indent)}`;
+
   return {
     op,
     describe,
@@ -1854,7 +1934,7 @@ export function addExpect(
         end: spot.at,
         text:
           `${spot.lead}${spot.indent}expect ${negated ? "no " : ""}${messageRef.text} ` +
-          `on ${pipeRef.text}${count}\n`,
+          `on ${pipeRef.text}${body}${count}\n`,
       },
     ],
     diagnostics,

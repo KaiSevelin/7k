@@ -209,3 +209,4 @@ export function parse(source: string, file = "<input>", kind?: FileKind): ParseR
 }
 
 export { Cursor } from "./cursor.js";
+export { readJsonBody } from "./body.js";

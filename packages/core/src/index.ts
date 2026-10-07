@@ -53,6 +53,7 @@ export {
   parseFile,
   parseFragment,
   parseScenarios,
+  readJsonBody,
   type FileKind,
   type ParseResult,
 } from "./parser/index.js";
