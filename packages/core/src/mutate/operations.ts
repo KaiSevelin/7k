@@ -485,6 +485,103 @@ export function addStep(
 }
 
 /**
+ * `undo with M`, or `undo none`, on a step that declares neither.
+ *
+ * The saga view already draws this absence — it writes `no inverse` where a step has no `undo`, on the
+ * grounds that the Process layer's two silences are what a reader must not have to notice are missing.
+ * This is that drawing made actionable: the gap is already on screen, so the gap is where the edit
+ * starts.
+ *
+ * **Both answers are written, because they are different answers.** `undo none` is a claim that this
+ * step has nothing to take back; an absent `undo` is nobody having said. The view reads them
+ * differently and so does a reader, so an operation that could only write one of them would be
+ * offering half the question.
+ *
+ * **Only where there is none.** Changing one that exists is a replacement rather than an insertion,
+ * and the two cases are not symmetrical: `undo with M` lowers to a `SendIr` with a span to aim at,
+ * while `undo none` lowers to `null` and has none. Rather than support one direction and refuse the
+ * other, this refuses both and says where to go — the text is one keypress away.
+ *
+ * No assignments are written. An inverse usually needs something the saga holds, and which field of
+ * which state is not derivable from anything; `ReleaseCompartment { compartment = state.compartment }`
+ * is a decision. What is written is the clause, and the checker says what it still wants.
+ */
+export function setUndo(
+  editable: Editable,
+  what: { readonly saga: string; readonly step: string; readonly message?: string },
+): Mutation {
+  const describe =
+    what.message === undefined
+      ? `undo none on ${what.step} of ${what.saga}`
+      : `undo ${what.step} of ${what.saga} with ${what.message}`;
+  const { model } = editable;
+
+  const saga = findDecl(model, what.saga, "saga");
+  if (saga === undefined || saga.kind !== "saga") {
+    return refuse("setUndo", describe, [
+      error("no-such-saga", `no saga \`${what.saga}\``, nowhere("")),
+    ]);
+  }
+
+  const step = saga.steps.find((s) => s.name.toLowerCase() === what.step.toLowerCase());
+  if (step === undefined) {
+    return refuse("setUndo", describe, [
+      error("no-such-step", `\`${saga.id.name}\` has no step \`${what.step}\``, saga.span),
+    ]);
+  }
+  if (step.undo !== undefined) {
+    return refuse("setUndo", describe, [
+      error(
+        "undo-declared",
+        `\`${step.name}\` already declares an inverse; changing one is an edit to the text rather than ` +
+          "an insertion, and the two forms are not replaceable by the same rule",
+        step.span,
+      ),
+    ]);
+  }
+
+  const source = editable.sources[saga.span.file];
+  if (source === undefined) {
+    return refuse("setUndo", describe, [
+      error("no-file", `\`${saga.id.name}\` has no file to add to`, saga.span),
+    ]);
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  let clause = "undo none";
+  if (what.message !== undefined) {
+    const message = findDecl(model, what.message, "message");
+    if (message === undefined) {
+      return refuse("setUndo", describe, [
+        error("no-such-message", `no message \`${what.message}\``, saga.span),
+      ]);
+    }
+    const ref = referenceTo(model, saga.id.pkg, message.id);
+    if (ref.problem !== undefined) diagnostics.push(warn("needs-import", ref.problem, message.span));
+    clause = `undo with ${ref.text}`;
+  }
+
+  // The step's own closing brace, which its span ends just after.
+  const closing = source.lastIndexOf("}", step.span.end);
+  if (closing < 0) {
+    return refuse("setUndo", describe, [
+      error("no-step-body", `could not find the end of \`${step.name}\``, step.span),
+    ]);
+  }
+  const lineStart = source.lastIndexOf("\n", closing) + 1;
+
+  const before = source.slice(0, lineStart).replace(/\r\n/g, "\n");
+  const lead = before.endsWith("\n\n") ? "" : "\n";
+
+  return {
+    op: "setUndo",
+    describe,
+    edits: [{ file: saga.span.file, start: lineStart, end: lineStart, text: `${lead}    ${clause}\n` }],
+    diagnostics,
+  };
+}
+
+/**
  * What handling a message can result in, as some service declared it.
  *
  * Read off the subscription rather than off the message, because that is where `replies` lives: a

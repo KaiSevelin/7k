@@ -19,6 +19,7 @@ import {
   applyAll,
   addSaga,
   addStep,
+  setUndo,
   buildWorkspace,
   connectEmit,
   connectReact,
@@ -642,5 +643,80 @@ describe("line endings", () => {
     const mutation = addPipe(where, { pkg: "acme.sales", name: "audit", kind: "topic" });
     const after = applyAll({ "sales.7k": source, "tickets.7k": TICKETS }, mutation.edits)["sales.7k"]!;
     expect(mixed(after)).toBe(0);
+  });
+});
+
+/**
+ * The inverse a step does not declare.
+ *
+ * The saga view already draws this gap — `no inverse` where a step has no `undo` — because the Process
+ * layer's two silences are what a reader must not have to notice are missing. So the gap is on screen,
+ * and this is what makes it actionable.
+ */
+describe("a step's inverse", () => {
+  const where = (source = SAGA_MODEL): Editable => editable({ "a.7k": source });
+  const applied = (m: Mutation, source = SAGA_MODEL): string =>
+    applyAll({ "a.7k": source }, m.edits)["a.7k"]!;
+
+  it("writes `undo with` and keeps the model checking out", () => {
+    const mutation = setUndo(where(), { saga: "Checkout", step: "hold", message: "Done" });
+    const after = applied(mutation);
+    expect(after).toContain("undo with Done");
+    const ws = buildWorkspace([{ path: "a.7k", source: after }]);
+    expect(ws.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+  });
+
+  /** A different answer, not the absence of one, so it has to be writable too. */
+  it("writes `undo none` when that is the answer", () => {
+    const mutation = setUndo(where(), { saga: "Checkout", step: "hold" });
+    const after = applied(mutation);
+    expect(after).toContain("undo none");
+    expect(after).not.toContain("undo with");
+    const ws = buildWorkspace([{ path: "a.7k", source: after }]);
+    expect(ws.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+  });
+
+  it("puts it inside the step it belongs to", () => {
+    const after = applied(setUndo(where(), { saga: "Checkout", step: "hold" }));
+    const step = after.slice(after.indexOf("step hold"), after.indexOf("on deadline"));
+    expect(step).toContain("undo none");
+  });
+
+  it("leaves one blank line before it", () => {
+    const after = applied(setUndo(where(), { saga: "Checkout", step: "hold" })).replace(/\r\n/g, "\n");
+    const at = after.indexOf("    undo none");
+    expect(after.slice(at - 2, at)).toBe("\n\n");
+  });
+
+  it("refuses a step that already declares one", () => {
+    const once = applied(setUndo(where(), { saga: "Checkout", step: "hold" }));
+    const twice = setUndo(where(once), { saga: "Checkout", step: "hold", message: "Done" });
+    expect(twice.edits).toEqual([]);
+    expect(twice.diagnostics[0]?.code).toBe("undo-declared");
+  });
+
+  it("refuses a step that is not there", () => {
+    const mutation = setUndo(where(), { saga: "Checkout", step: "nope" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("no-such-step");
+  });
+
+  it("refuses a message that is not there", () => {
+    const mutation = setUndo(where(), { saga: "Checkout", step: "hold", message: "Nope" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("no-such-message");
+  });
+
+  it("changes nothing outside the span it edits", () => {
+    const files = { "a.7k": SAGA_MODEL };
+    const mutation = setUndo(where(), { saga: "Checkout", step: "hold", message: "Done" });
+    outsideUnchanged(files, applyAll(files, mutation.edits), mutation.edits);
+  });
+
+  it("splices into a CRLF file without mixing endings", () => {
+    const source = SAGA_MODEL.replace(/\n/g, "\r\n");
+    const mutation = setUndo(where(source), { saga: "Checkout", step: "hold" });
+    const after = applied(mutation, source);
+    expect((after.match(/[^\r]\n/g) ?? []).length).toBe(0);
   });
 });

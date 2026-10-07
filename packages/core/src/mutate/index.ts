@@ -43,6 +43,7 @@ export {
   addSaga,
   addService,
   addStep,
+  setUndo,
   connectEmit,
   connectReact,
   disconnectEmit,
