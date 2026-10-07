@@ -19,6 +19,8 @@ import {
   applyAll,
   addSaga,
   addStep,
+  setDeadline,
+  setTerminal,
   setUndo,
   buildWorkspace,
   connectEmit,
@@ -717,6 +719,114 @@ describe("a step's inverse", () => {
     const source = SAGA_MODEL.replace(/\n/g, "\r\n");
     const mutation = setUndo(where(source), { saga: "Checkout", step: "hold" });
     const after = applied(mutation, source);
+    expect((after.match(/[^\r]\n/g) ?? []).length).toBe(0);
+  });
+});
+
+/**
+ * What a saga says when it ends, and when it gives up.
+ *
+ * The saga view draws all three terminals whether or not they were declared — an undeclared one reads
+ * "announces nothing" — and draws `no deadline` for a saga without one. Both are the same move as
+ * `no inverse`: the gap is on screen, so the gap is where the edit starts.
+ */
+describe("a saga's ending", () => {
+  const where = (source = SAGA_MODEL): Editable => editable({ "a.7k": source });
+  const applied = (m: Mutation, source = SAGA_MODEL): string =>
+    applyAll({ "a.7k": source }, m.edits)["a.7k"]!;
+  const clean = (source: string): readonly string[] =>
+    buildWorkspace([{ path: "a.7k", source }])
+      .diagnostics.filter((d) => d.severity === "error")
+      .map((d) => `${d.code}: ${d.message}`);
+
+  it("writes a terminal beside the ones already there", () => {
+    const mutation = setTerminal(where(), { saga: "Checkout", on: "reject", message: "Done" });
+    const after = applied(mutation);
+    expect(after).toContain("on reject send Done");
+    expect(clean(after)).toEqual([]);
+    // Beside `on complete`, not before the steps.
+    expect(after.indexOf("on reject")).toBeGreaterThan(after.indexOf("step hold"));
+  });
+
+  it("writes all three, one at a time", () => {
+    let source = SAGA_MODEL;
+    for (const on of ["reject", "abandon"] as const) {
+      source = applied(setTerminal(where(source), { saga: "Checkout", on, message: "Done" }), source);
+    }
+    expect(source).toContain("on complete send Done");
+    expect(source).toContain("on reject send Done");
+    expect(source).toContain("on abandon send Done");
+    expect(clean(source)).toEqual([]);
+  });
+
+  it("refuses one the saga already declares", () => {
+    const mutation = setTerminal(where(), { saga: "Checkout", on: "complete", message: "Done" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("terminal-declared");
+  });
+
+  it("refuses a message that is not there", () => {
+    const mutation = setTerminal(where(), { saga: "Checkout", on: "reject", message: "Nope" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("no-such-message");
+  });
+
+  /**
+   * Not only presentation: a step with no `timeout` is legal exactly while the saga has a deadline,
+   * because `saga-liveness` is an error. So this is the other half of what `addStep` leaves open.
+   */
+  /**
+   * The existing step gets a timeout of its own first, because without the deadline it would be
+   * illegal too — which is the rule being demonstrated, arriving a step early.
+   */
+  const noDeadline = SAGA_MODEL.replace("  on deadline 24h abandon\n\n", "").replace(
+    '    on Refused reject "no stock"\n',
+    '    on Refused reject "no stock"\n    on timeout 30s reject "slow"\n',
+  );
+
+  it("writes a deadline, and that is what makes a step without a timeout legal", () => {
+    const withStep = applied(
+      addStep(where(noDeadline), { saga: "Checkout", name: "ship", send: "Reserve" }),
+      noDeadline,
+    );
+    expect(clean(withStep).join(" ")).toContain("saga-liveness");
+
+    // Built without the no-errors check: this model has the error on purpose, and fixing it is what
+    // the operation is for.
+    const broken = buildWorkspace([{ path: "a.7k", source: withStep }]);
+    const loose: Editable = {
+      model: broken.model,
+      trees: broken.trees,
+      sources: { "a.7k": withStep },
+    };
+    const fixed = applied(setDeadline(loose, { saga: "Checkout", after: "24h" }), withStep);
+    expect(fixed).toContain("on deadline 24h abandon");
+    expect(clean(fixed)).toEqual([]);
+  });
+
+  it("puts the deadline above the terminals, where it reads", () => {
+    const after = applied(setDeadline(where(noDeadline), { saga: "Checkout", after: "6h" }), noDeadline);
+    expect(after.indexOf("on deadline")).toBeLessThan(after.indexOf("on complete"));
+  });
+
+  it("refuses a deadline the saga already has", () => {
+    const mutation = setDeadline(where(), { saga: "Checkout", after: "1h" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("deadline-declared");
+  });
+
+  it("changes nothing outside the span it edits", () => {
+    const files = { "a.7k": SAGA_MODEL };
+    const mutation = setTerminal(where(), { saga: "Checkout", on: "abandon", message: "Done" });
+    outsideUnchanged(files, applyAll(files, mutation.edits), mutation.edits);
+  });
+
+  it("splices into a CRLF file without mixing endings", () => {
+    const source = SAGA_MODEL.replace(/\n/g, "\r\n");
+    const after = applied(
+      setTerminal(where(source), { saga: "Checkout", on: "reject", message: "Done" }),
+      source,
+    );
     expect((after.match(/[^\r]\n/g) ?? []).length).toBe(0);
   });
 });

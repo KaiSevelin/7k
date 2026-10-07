@@ -43,6 +43,8 @@ export {
   addSaga,
   addService,
   addStep,
+  setDeadline,
+  setTerminal,
   setUndo,
   connectEmit,
   connectReact,

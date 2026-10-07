@@ -14,7 +14,15 @@
 
 import { childNodes, isToken, tokens, type CstNode } from "../cst.js";
 import type { Diagnostic, Span } from "../diagnostics.js";
-import { qualify, symbolKey, type Decl, type NodeId, type SagaIr, type ServiceIr } from "../ir/model.js";
+import {
+  qualify,
+  symbolKey,
+  type Decl,
+  type NodeId,
+  type SagaIr,
+  type ServiceIr,
+  type Terminal,
+} from "../ir/model.js";
 import type { LinkedModel } from "../ir/link.js";
 import { refuse, type Mutation, type TextEdit } from "./edit.js";
 
@@ -579,6 +587,145 @@ export function setUndo(
     edits: [{ file: saga.span.file, start: lineStart, end: lineStart, text: `${lead}    ${clause}\n` }],
     diagnostics,
   };
+}
+
+/**
+ * `on complete send M`, or `on reject`, or `on abandon`.
+ *
+ * The saga view draws all three whether or not they were declared — an undeclared one reads "announces
+ * nothing" — on the grounds that a saga which can abandon and tells nobody is exactly what a reader is
+ * looking for. So all three are already on screen, and this is what makes each of them fillable.
+ *
+ * One at a time, and only where there is none: a terminal that exists is a `send` with a span, and
+ * replacing it is an edit to the text rather than an insertion.
+ */
+export function setTerminal(
+  editable: Editable,
+  what: { readonly saga: string; readonly on: Terminal; readonly message: string },
+): Mutation {
+  const describe = `on ${what.on} send ${what.message} in ${what.saga}`;
+  const { model } = editable;
+
+  const saga = findDecl(model, what.saga, "saga");
+  if (saga === undefined || saga.kind !== "saga") {
+    return refuse("setTerminal", describe, [
+      error("no-such-saga", `no saga \`${what.saga}\``, nowhere("")),
+    ]);
+  }
+  if (saga.terminals.some((t) => t.on === what.on)) {
+    return refuse("setTerminal", describe, [
+      error(
+        "terminal-declared",
+        `\`${saga.id.name}\` already says what happens on \`${what.on}\``,
+        saga.span,
+      ),
+    ]);
+  }
+
+  const message = findDecl(model, what.message, "message");
+  if (message === undefined) {
+    return refuse("setTerminal", describe, [
+      error("no-such-message", `no message \`${what.message}\``, saga.span),
+    ]);
+  }
+
+  const source = editable.sources[saga.span.file];
+  if (source === undefined) {
+    return refuse("setTerminal", describe, [
+      error("no-file", `\`${saga.id.name}\` has no file to add to`, saga.span),
+    ]);
+  }
+
+  const ref = referenceTo(model, saga.id.pkg, message.id);
+  const diagnostics: Diagnostic[] = [];
+  if (ref.problem !== undefined) diagnostics.push(warn("needs-import", ref.problem, message.span));
+
+  const at = afterTheLastTerminal(saga, source);
+  const before = source.slice(0, at).replace(/\r\n/g, "\n");
+  const lead = before.endsWith("\n\n") ? "" : "\n";
+
+  return {
+    op: "setTerminal",
+    describe,
+    edits: [
+      { file: saga.span.file, start: at, end: at, text: `${lead}  on ${what.on} send ${ref.text}\n` },
+    ],
+    diagnostics,
+  };
+}
+
+/**
+ * `on deadline 24h abandon`, on a saga that has none.
+ *
+ * Drawn as `no deadline` already, and it is not only presentation: a step with no `timeout` is legal
+ * exactly while the saga has one of these, because `saga-liveness` is an error and says "nothing will
+ * ever end this wait". So this is the other half of what `addStep` leaves open.
+ *
+ * The duration is the caller's. There is no sensible default — a week and thirty seconds are both
+ * right for some saga — and a number nobody chose is a decision nobody made.
+ */
+export function setDeadline(
+  editable: Editable,
+  what: { readonly saga: string; readonly after: string },
+): Mutation {
+  const describe = `deadline ${what.after} on ${what.saga}`;
+  const { model } = editable;
+
+  const saga = findDecl(model, what.saga, "saga");
+  if (saga === undefined || saga.kind !== "saga") {
+    return refuse("setDeadline", describe, [
+      error("no-such-saga", `no saga \`${what.saga}\``, nowhere("")),
+    ]);
+  }
+  if (saga.deadlineMs !== undefined) {
+    return refuse("setDeadline", describe, [
+      error("deadline-declared", `\`${saga.id.name}\` already has a deadline`, saga.span),
+    ]);
+  }
+
+  const source = editable.sources[saga.span.file];
+  if (source === undefined) {
+    return refuse("setDeadline", describe, [
+      error("no-file", `\`${saga.id.name}\` has no file to add to`, saga.span),
+    ]);
+  }
+
+  // Where a step would go, which is before the terminals — and a deadline reads with them, above.
+  const at = stepInsertion(saga, source);
+  const before = source.slice(0, at).replace(/\r\n/g, "\n");
+  const lead = before.endsWith("\n\n") ? "" : "\n";
+
+  return {
+    op: "setDeadline",
+    describe,
+    edits: [
+      { file: saga.span.file, start: at, end: at, text: `${lead}  on deadline ${what.after} abandon\n` },
+    ],
+    diagnostics: [],
+  };
+}
+
+/**
+ * Just past the last terminal clause, so a new one joins the others.
+ *
+ * `on deadline` carries no `send` and therefore no span, so it is found in the saga's own text the way
+ * `stepInsertion` finds it. With neither, this is the saga's closing brace — the same place a step
+ * would go, which is right, because then there is nothing to be after.
+ */
+function afterTheLastTerminal(saga: SagaIr, source: string): number {
+  const ends = saga.terminals.map((t) => t.send.span.end);
+
+  const body = source.slice(saga.span.start, saga.span.end);
+  const deadline = /(^|\n)[^\S\n]*on[^\S\n]+deadline\b[^\n]*/.exec(body);
+  if (deadline !== null) {
+    ends.push(saga.span.start + deadline.index + deadline[0].length);
+  }
+
+  const last = ends.sort((a, b) => b - a)[0];
+  if (last === undefined) return stepInsertion(saga, source);
+
+  const lineEnd = source.indexOf("\n", last);
+  return lineEnd < 0 ? last : lineEnd + 1;
 }
 
 /**
