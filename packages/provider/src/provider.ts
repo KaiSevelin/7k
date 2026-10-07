@@ -77,10 +77,53 @@ export interface Refusal {
   readonly draft?: readonly Artifact[];
 }
 
+/**
+ * Where a declaration landed in the generated code.
+ *
+ * **What a host cannot work out and a provider cannot avoid knowing.** The model says `reacts
+ * PlaceOrder from inbound`, so anyone can see that `OrderService` handles that message; nobody but the
+ * provider knows the handler is called `HandlePlaceOrder`, because that name is the provider's own
+ * convention applied to the model. A tool that wanted to set a breakpoint on it would otherwise have to
+ * learn one naming convention per target, which is exactly the coupling D48 keeps out.
+ *
+ * **Reported, not predicted.** This is produced in the same pass that writes the file, from the same
+ * function that names the method — so the symbol reported is the symbol written. D108 declined an
+ * `emitsFor` predicate for the opposite reason: it would have been a second implementation of what
+ * `generate` decides, with nothing able to check that the two agree. This one cannot disagree with
+ * itself, and `path` is checked against the artifacts the provider handed back.
+ *
+ * Optional, because a provider with nothing useful to point at — Bicep names no handler — reports none.
+ */
+export interface GeneratedSymbol {
+  /** The declaration this is about, qualified. For a handler, the message being handled. */
+  readonly at: string;
+  /** The service whose handler this is, qualified. Absent for anything that is not one. */
+  readonly on?: string;
+  /**
+   * What kind of thing the symbol names.
+   *
+   * `handler` is the one a debugger wants: a function that runs when a message arrives. `type` is the
+   * generated shape of a message or record, and `service` the class or module that holds the handlers.
+   */
+  readonly kind: "handler" | "type" | "service";
+  /** What a debugger would break on, as that language spells it: `Shop.OrderService.HandlePlaceOrder`. */
+  readonly symbol: string;
+  /** The artifact that holds it, as `Artifact.path`. Checked against what was emitted. */
+  readonly path?: string;
+}
+
 /** Everything one provider produced for one entry. */
 export interface Generated {
   readonly artifacts: readonly Artifact[];
   readonly refusals: readonly Refusal[];
+  /**
+   * Where the declarations landed, for a tool that wants to point at the code rather than read it.
+   *
+   * Spider uses these to say which function handles a message and to offer a breakpoint on it — the
+   * one thing standing between "Spider knows the model" and "Spider can stop your debugger on the
+   * handler", and the only part of it a provider has to supply.
+   */
+  readonly symbols?: readonly GeneratedSymbol[];
 }
 
 /**

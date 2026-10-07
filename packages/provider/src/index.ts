@@ -18,6 +18,7 @@
 export {
   type Artifact,
   type Generated,
+  type GeneratedSymbol,
   type Layout,
   type Provider,
   type Refusal,

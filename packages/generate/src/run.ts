@@ -28,7 +28,15 @@ import type { Entry, Manifest } from "./manifest.js";
 import { compileRules, type Options } from "./rules.js";
 import { validateOptions, withDefaults } from "./options.js";
 import { matcher, parseSelector } from "./selector.js";
-import type { Artifact, Generated, Loss, NameTable, Provider, Refusal } from "@sevenk/provider";
+import type {
+  Artifact,
+  Generated,
+  GeneratedSymbol,
+  Loss,
+  NameTable,
+  Provider,
+  Refusal,
+} from "@sevenk/provider";
 
 /** A file the run decided on, with the entry that produced it. */
 export interface Planned {
@@ -55,9 +63,22 @@ export interface Problem {
   readonly problem: string;
 }
 
+/** A `GeneratedSymbol` with the provider that reported it, and its path made relative to the run. */
+export interface PlannedSymbol extends GeneratedSymbol {
+  readonly provider: string;
+}
+
 export interface RunResult {
   /** What would be written. Empty when the run refused and no draft was asked for. */
   readonly files: readonly Planned[];
+  /**
+   * Where the declarations landed in the generated code, from every provider that says.
+   *
+   * Reported even when the run refused, unlike `files`: a symbol is a fact about what this provider
+   * calls things and is not made wrong by another provider failing. It is what lets a tool point at
+   * the handler for a message without learning one naming convention per target.
+   */
+  readonly symbols: readonly PlannedSymbol[];
   /** Every refusal from every provider, not just the first. */
   readonly refusals: readonly { readonly provider: string; readonly refusal: Refusal }[];
   /** Manifest faults, unmatched selectors, path collisions. */
@@ -91,17 +112,30 @@ function outsideKinds(
   at: string,
 ): Problem[] {
   const allowed = new Set(provider.emits);
-  const byName = new Map<string, Decl>();
-  for (const decl of model.decls) byName.set(qualify(decl.id), decl);
+
+  // Every declaration a name could mean, not one.
+  //
+  // A qualified name is not unique across kinds: an `upcast` carries the name of the message it is
+  // about, so `acme.sales.OrderPlaced` is both a message and an upcast, and a map keyed by the name
+  // kept whichever came last in `model.decls`. Every artifact legitimately made `from` that message
+  // was then attributed to the upcast — which no provider declares — and the check reported a
+  // violation on any model with an upcast in it. `from` is a name, so the claim is honoured when
+  // *any* declaration of that name is a kind the provider emits for.
+  const byName = new Map<string, Decl[]>();
+  for (const decl of model.decls) {
+    byName.set(qualify(decl.id), [...(byName.get(qualify(decl.id)) ?? []), decl]);
+  }
 
   const strayed = new Map<string, Set<string>>();
   for (const artifact of artifacts) {
     for (const name of artifact.from ?? []) {
-      const decl = byName.get(name);
-      if (decl === undefined || allowed.has(decl.kind)) continue;
-      const kinds = strayed.get(decl.kind) ?? new Set<string>();
-      kinds.add(name);
-      strayed.set(decl.kind, kinds);
+      const decls = byName.get(name);
+      if (decls === undefined || decls.some((d) => allowed.has(d.kind))) continue;
+      for (const decl of decls) {
+        const kinds = strayed.get(decl.kind) ?? new Set<string>();
+        kinds.add(name);
+        strayed.set(decl.kind, kinds);
+      }
     }
   }
 
@@ -130,6 +164,7 @@ export function plan(model: LinkedModel, manifest: Manifest, options: RunOptions
 
   const files: Planned[] = [];
   const refusals: { provider: string; refusal: Refusal }[] = [];
+  const symbols: PlannedSymbol[] = [];
 
   for (const [i, entry] of manifest.emit.entries()) {
     const at = `emit[${i}] ${entry.provider}`;
@@ -209,6 +244,25 @@ export function plan(model: LinkedModel, manifest: Manifest, options: RunOptions
       });
     }
 
+    // A symbol naming an artifact nobody wrote is the same class of claim as `emits`, and checked the
+    // same way: a provider that says the handler is in `Orders.cs` and emitted no such file is
+    // pointing a debugger at nothing.
+    const wrote = new Set(produced.artifacts.map((a) => a.path));
+    for (const symbol of produced.symbols ?? []) {
+      if (symbol.path !== undefined && !wrote.has(symbol.path)) {
+        problems.push({
+          at,
+          problem: `reports \`${symbol.symbol}\` in \`${symbol.path}\`, which it did not emit`,
+        });
+        continue;
+      }
+      symbols.push({
+        ...symbol,
+        provider: provider.name,
+        ...(symbol.path === undefined ? {} : { path: join(entry.out, symbol.path) }),
+      });
+    }
+
     for (const refusal of produced.refusals) {
       refusals.push({ provider: provider.name, refusal });
       if (options.draft !== true) continue;
@@ -244,6 +298,7 @@ export function plan(model: LinkedModel, manifest: Manifest, options: RunOptions
   return {
     // Atomic: a run that refused writes nothing at all unless a draft was asked for.
     files: ok || options.draft === true ? files : [],
+    symbols,
     refusals,
     problems,
     names,

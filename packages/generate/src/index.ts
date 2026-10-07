@@ -15,6 +15,7 @@ export {
   type Artifact,
   type Fidelity,
   type Generated,
+  type GeneratedSymbol,
   type Layout,
   type Loss,
   type NameTable,
@@ -54,4 +55,11 @@ export {
   type Read,
 } from "./compare.js";
 
-export { plan, type Planned, type Problem, type RunOptions, type RunResult } from "./run.js";
+export {
+  plan,
+  type Planned,
+  type PlannedSymbol,
+  type Problem,
+  type RunOptions,
+  type RunResult,
+} from "./run.js";

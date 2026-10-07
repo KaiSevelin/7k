@@ -19,6 +19,7 @@ import {
   select,
   validateOptions,
   type Generated,
+  type GeneratedSymbol,
   type Manifest,
   type OptionSpec,
   type Provider,
@@ -102,6 +103,8 @@ function spy(
     readonly layouts?: readonly ("per-declaration" | "per-package" | "single")[];
     /** What it claims to emit for. Narrower than what it does, to test that the claim is checked. */
     readonly emits?: readonly DeclKind[];
+    /** Symbols to report, to test that their paths are checked against what was emitted. */
+    readonly symbols?: readonly GeneratedSymbol[];
   } = {},
 ): Provider & { seen?: Request } {
   const provider: Provider & { seen?: Request } = {
@@ -129,7 +132,7 @@ function spy(
           because: "this provider cannot",
           draft: [{ path: `${d.id.name}.txt`, content: "#error 7K: refused", losses: [] }],
         }));
-      return { artifacts, refusals };
+      return { artifacts, refusals, ...(options.symbols === undefined ? {} : { symbols: options.symbols }) };
     },
   };
   return provider;
@@ -448,5 +451,102 @@ describe("the manifest", () => {
 
   it("refuses something that is not JSON, without throwing", () => {
     expect(parseManifest("{ nope").problems[0]?.problem).toContain("not JSON");
+  });
+});
+
+/**
+ * Where a declaration landed in the generated code.
+ *
+ * A provider reports these from the same pass that writes the file, so unlike a predicate they cannot
+ * disagree with what was written. What the run has to check is the one thing that *can* be wrong: a
+ * symbol pointing at a file the provider did not emit, which would point a debugger at nothing.
+ */
+describe("symbols", () => {
+  it("carries them through, with the entry's output directory on the path", () => {
+    const result = run(manifest({ only: "message:*" }), [
+      spy({
+        symbols: [
+          { at: "shop.orders.PlaceOrder", kind: "handler", symbol: "HandlePlaceOrder", path: "PlaceOrder.txt" },
+        ],
+      }),
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.symbols).toHaveLength(1);
+    expect(result.symbols[0]?.symbol).toBe("HandlePlaceOrder");
+    expect(result.symbols[0]?.provider).toBe("spy");
+    // Relative to the run, as `files` are: a path only the entry knows where to put.
+    expect(result.symbols[0]?.path).toBe("spy/PlaceOrder.txt");
+    expect(result.files[0]?.path.startsWith("spy/")).toBe(true);
+  });
+
+  it("reports one that names a file the provider did not emit", () => {
+    const result = run(manifest({ only: "message:*" }), [
+      spy({ symbols: [{ at: "shop.orders.PlaceOrder", kind: "handler", symbol: "H", path: "Nope.txt" }] }),
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.problems[0]?.problem).toContain("which it did not emit");
+    expect(result.symbols).toEqual([]);
+  });
+
+  it("takes one with no file at all, since not every symbol has one", () => {
+    const result = run(manifest({ only: "message:*" }), [
+      spy({ symbols: [{ at: "shop.orders.PlaceOrder", kind: "type", symbol: "PlaceOrder" }] }),
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.symbols[0]?.path).toBeUndefined();
+  });
+});
+
+/**
+ * A `from` name that several declarations answer to.
+ *
+ * An `upcast` carries the name of the message it is about, so `shop.orders.PlaceOrder` is both a
+ * message and an upcast. The `emits` check keyed a map by the qualified name and kept whichever came
+ * last, so every artifact legitimately made from that message was attributed to the upcast — which no
+ * provider declares — and the check reported a violation on any model with an upcast in it.
+ */
+describe("a name two declarations share", () => {
+  /**
+   * `shop.orders` again, with its message at v1.1 and the upcast that gets you there.
+   *
+   * In the message's own package, since an imported declaration is read-only and translating someone
+   * else's message is an adapter service's job — which is also why this is the realistic shape of the
+   * collision rather than a contrived one.
+   */
+  const ORDERS_V11 = `${ORDERS.replace(
+    "message PlaceOrder v1.0 @command {\n  orderRef: uuid @role(businessKey)",
+    "message PlaceOrder v1.1 @command {\n  orderRef: uuid @role(businessKey)\n  note: string? @since(v1.1)",
+  )}
+upcast PlaceOrder v1.0 to v1.1 {
+  note = absent
+}
+`;
+
+  const withUpcast = (): LinkedModel => {
+    const ws = buildWorkspace([
+      { path: "common.7k", source: MODEL },
+      { path: "orders.7k", source: ORDERS_V11 },
+    ]);
+    expect(ws.diagnostics.filter((d) => d.severity === "error").map((d) => d.message)).toEqual([]);
+    // The collision the fix is about: one name, two declarations.
+    const named = ws.model.decls.filter((d) => qualify(d.id) === "shop.orders.PlaceOrder");
+    expect(named.map((d) => d.kind).sort()).toEqual(["message", "upcast"]);
+    return ws.model;
+  };
+
+  it("is satisfied when any of them is a kind the provider emits for", () => {
+    const result = plan(withUpcast(), manifest({ only: "message:*" }), {
+      providers: new Map([["spy", spy({ emits: ["message"] })]]),
+    });
+    expect(result.problems).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("is still reported when none of them is", () => {
+    const result = plan(withUpcast(), manifest({ only: "message:*" }), {
+      providers: new Map([["spy", spy({ emits: ["pipe"] })]]),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.problems[0]?.problem).toContain("declares it emits for pipe");
   });
 });
