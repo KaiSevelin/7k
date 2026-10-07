@@ -20,9 +20,14 @@
  * saved position and every lens entry that named the old one. That wants doing properly rather than
  * soon.
  *
- * **`moveToPackage`** is "the largest structural mutation in the API, the only one that moves text
- * between files, and the only one that can change a message's wire type — so it reports that consequence
- * before applying". A mutation that can change what is on the wire is not the second thing to build.
+ * **`moveToPackage`** is here, and all three of the specification's claims about it are true: it is the
+ * largest, it is the only one that moves text between files, and it is the only one that can change a
+ * message's wire type — which it reports. None of those is the hard part. The hard part is that a
+ * reference's text depends on where it is read from, so a move changes the answer for every reference
+ * *to* the declaration and every reference *inside* it, and an `import` is a consequence of that rather
+ * than a warning about it. Whether the result still checks out is asked of `packageDependencies` with a
+ * relocation, rather than reimplemented: a move that would leave a cycle or an upward tier dependency
+ * is refused with the rule's own words.
  *
  * The data operations — `addValue`, `addRecord`, `addField`, `setConstraint` — are local in the same way
  * the connecting ones are, and are simply not written yet.
@@ -69,6 +74,7 @@ export {
   addStep,
   carriersOf,
   emittersOf,
+  moveToPackage,
   removePipe,
   removeService,
   setDeadline,

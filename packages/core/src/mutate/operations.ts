@@ -28,12 +28,14 @@ import {
   symbolKey,
   type Decl,
   type NodeId,
+  type PackageIr,
   type Ref,
   type SagaIr,
   type ServiceIr,
   type Terminal,
 } from "../ir/model.js";
 import { referenceSites, type LinkedModel } from "../ir/link.js";
+import { packageDependencies } from "../ir/analyze.js";
 import { trafficOf } from "../ir/labels.js";
 import { parseDuration, writeDuration } from "../literals.js";
 import { readJsonBody } from "../parser/body.js";
@@ -350,6 +352,327 @@ export function addPipe(
   );
 }
 
+
+// ---- moveToPackage ----------------------------------------------------------
+
+/**
+ * `moveToPackage(decl, package)` — the declaration, its text, and every name that has to change
+ * because of it.
+ *
+ * `20-ir.md` section 7 calls this "the largest structural mutation in the API, the only one that moves
+ * text between files, and the only one that can change a message's wire type — so it reports that
+ * consequence before applying". D98 deferred it on exactly that ground. All three are true and none of
+ * them is the hard part.
+ *
+ * **The hard part is that a reference's text depends on where it is read from.** A name written bare in
+ * `acme.shop` is written `shop.Thing` from `acme.sales`, and both are the same reference. Moving a
+ * declaration changes the answer for every reference *to* it — and, because the moved text goes with
+ * it, for every reference *inside* it as well. So this rewrites in both directions, from each side's own
+ * point of view, using `referenceTo` for every one rather than a rule about which need qualifying.
+ *
+ * **And an import is a consequence, not a warning.** Qualifying a reference does nothing unless the
+ * package importing it says so, so this adds the `import` lines both directions need. The rule the rest
+ * of the module follows is that a mutation may cost something and say so, but does not leave the model
+ * not checking out — and a move that reported "you will need three imports" would be leaving exactly
+ * that.
+ *
+ * **What it does not do: it does not reorder, reindent or reflow.** The declaration's text is lifted
+ * byte for byte apart from the references inside it, so a comment, a blank line and a field's alignment
+ * all survive the trip. That is section 7.2's promise, and it is what makes a move reviewable as a diff
+ * rather than as a rewrite.
+ */
+export function moveToPackage(
+  editable: Editable,
+  what: { readonly decl: string; readonly to: string },
+): Mutation {
+  const op = "moveToPackage";
+  const describe = `move ${what.decl} to ${what.to}`;
+  const { model } = editable;
+
+  const decl = model.decls.find((d) => d.kind !== "upcast" && matches(d, what.decl));
+  if (decl === undefined) {
+    return refuse(op, describe, [
+      error("no-such-declaration", `nothing named \`${what.decl}\``, nowhere("")),
+    ]);
+  }
+  if (decl.id.pkg === what.to) {
+    return refuse(op, describe, [
+      error("already-there", `\`${decl.id.name}\` is already in \`${what.to}\``, decl.span),
+    ]);
+  }
+
+  const target = model.packages.get(what.to);
+  const targetFile = target?.file;
+  const targetSource = targetFile === undefined ? undefined : editable.sources[targetFile];
+  if (target === undefined || targetFile === undefined || targetSource === undefined) {
+    return refuse(op, describe, [
+      error("no-such-package", `no package \`${what.to}\` with a file to move into`, decl.span),
+    ]);
+  }
+
+  // D40 again: one namespace per package, folding case.
+  const taken = model.symbols.get(symbolKey(what.to, decl.id.name));
+  if (taken !== undefined) {
+    return refuse(op, describe, [
+      error(
+        "name-taken",
+        `\`${what.to}\` already declares \`${taken.id.name}\`, and names fold case`,
+        taken.span,
+      ),
+    ]);
+  }
+
+  const source = editable.sources[decl.file];
+  if (source === undefined) {
+    return refuse(op, describe, [
+      error("no-tree", `\`${decl.file}\` was not parsed, so it cannot be edited`, decl.span),
+    ]);
+  }
+
+  const moved: NodeId = { ...decl.id, pkg: what.to };
+  const key = symbolKey(decl.id.pkg, decl.id.name);
+
+  // **Would the result still check out?** A move changes which package depends on which, so it can
+  // leave a cycle or an upward tier dependency behind — both errors, and both invisible until after
+  // the write. Asked of the rule itself rather than reimplemented here: `packageDependencies` takes a
+  // relocation and answers as if the declaration were already there. Refused rather than said,
+  // because this is the module's one line — a mutation may cost something, but it does not leave the
+  // model not checking out.
+  const before = new Set(packageDependencies(model).map((d) => `${d.code}\u0000${d.message}`));
+  const after = packageDependencies(model, { key, to: what.to }).filter(
+    (d) => d.severity === "error" && !before.has(`${d.code}\u0000${d.message}`),
+  );
+  if (after.length > 0) {
+    return refuse(op, describe, [
+      error(
+        after[0]!.code,
+        `moving \`${decl.id.name}\` to \`${what.to}\` would leave the model not checking out: ` +
+          after[0]!.message,
+        decl.span,
+      ),
+    ]);
+  }
+  const edits: TextEdit[] = [];
+  const diagnostics: Diagnostic[] = [];
+  /** Packages that will need an import, and of what. */
+  const needed = new Map<string, Set<string>>();
+  const needs = (fromPkg: string, importing: string): void => {
+    if (fromPkg === importing) return;
+    const already = model.packages.get(fromPkg)?.imports.some((i) => i.target === importing);
+    if (already === true) return;
+    needed.set(fromPkg, new Set([...(needed.get(fromPkg) ?? []), importing]));
+  };
+
+  // ---- the text, with the references inside it rewritten for where it is going ----
+
+  const whole = spanOfWhole(source, decl);
+  const inside = (ref: Ref): boolean =>
+    ref.span.file === decl.file && ref.span.start >= whole.start && ref.span.end <= whole.end;
+
+  let lifted = source.slice(whole.start, whole.end);
+  const within: { start: number; end: number; text: string }[] = [];
+  for (const site of referenceSites(model)) {
+    if (!inside(site.ref)) continue;
+    const to = model.resolve(site.ref);
+    // A reference to itself — a record holding its own kind — moves with it and needs nothing.
+    if (to === undefined || symbolKey(to.pkg, to.name) === key) continue;
+    const ref = referenceAfterImport(model, what.to, to);
+    within.push({
+      start: site.ref.span.start - whole.start,
+      end: site.ref.span.end - whole.start,
+      text: ref.text,
+    });
+    if (ref.needsImport) needs(what.to, to.pkg);
+  }
+  // Backwards, so an earlier rewrite does not move a later one's offsets.
+  for (const one of within.sort((a, b) => b.start - a.start)) {
+    lifted = lifted.slice(0, one.start) + one.text + lifted.slice(one.end);
+  }
+
+  edits.push({ file: decl.file, start: whole.start, end: whole.end, text: "" });
+
+  // Appended, as `addDecl` appends and for the same reason: a package's declarations are unordered, so
+  // there is no better place and no worse one.
+  const prefix = targetSource.endsWith("\n")
+    ? targetSource.endsWith("\n\n")
+      ? ""
+      : "\n"
+    : "\n\n";
+  edits.push({
+    file: targetFile,
+    start: targetSource.length,
+    end: targetSource.length,
+    text: `${prefix}${lifted.trimEnd()}\n`,
+  });
+
+  // ---- every reference to it, from wherever it is read ----
+
+  for (const site of referenceSites(model)) {
+    if (inside(site.ref)) continue;
+    const to = model.resolve(site.ref);
+    if (to === undefined || symbolKey(to.pkg, to.name) !== key) continue;
+    const ref = referenceAfterImport(model, site.fromPkg, moved);
+    edits.push({
+      file: site.ref.span.file,
+      start: site.ref.span.start,
+      end: site.ref.span.end,
+      text: ref.text,
+    });
+    if (ref.needsImport) needs(site.fromPkg, what.to);
+  }
+
+  // ---- the scenarios, which name it too ----
+
+  for (const scenario of scenarioTreesOf(editable)) {
+    for (const name of descendants(scenario.root)) {
+      if (name.kind !== "QName") continue;
+      const text = flatText(name);
+      const dead = text.endsWith(".dead");
+      const base = dead ? text.slice(0, -5) : text;
+      const found = model.lookup(scenario.pkg, base);
+      if (found === undefined || symbolKey(found.id.pkg, found.id.name) !== key) continue;
+      const ref = referenceAfterImport(model, scenario.pkg, moved);
+      edits.push({
+        file: scenario.file,
+        start: name.start,
+        end: name.end,
+        text: `${ref.text}${dead ? ".dead" : ""}`,
+      });
+      // A scenario file sees its package's imports, so the import it needs is that package's.
+      if (ref.needsImport) needs(scenario.pkg, what.to);
+    }
+  }
+
+  // ---- the imports the result needs ----
+
+  for (const [fromPkg, targets] of needed) {
+    const pkg = model.packages.get(fromPkg);
+    const file = pkg?.file;
+    const text = file === undefined ? undefined : editable.sources[file];
+    if (pkg === undefined || file === undefined || text === undefined) {
+      diagnostics.push(
+        warn(
+          "cannot-import",
+          `\`${fromPkg}\` needs to import ${[...targets].map((t) => `\`${t}\``).join(", ")} and has ` +
+            "no file to write that into",
+          decl.span,
+        ),
+      );
+      continue;
+    }
+    const at = importInsertion(text, pkg);
+    edits.push({
+      file,
+      start: at.start,
+      end: at.start,
+      text: [...targets].sort().map((t) => `import ${t}\n`).join("") + at.after,
+    });
+  }
+
+  // The qualified name of a message *is* its wire type, and a move changes the package half of it.
+  // Said rather than refused — moving before anything is deployed is exactly when it should be easy —
+  // but said first, because this is the one mutation that can change what is on the wire.
+  if (decl.kind === "message") {
+    diagnostics.push(
+      warn(
+        "wire-type-changes",
+        `\`${qualify(decl.id)}\` becomes \`${qualify(moved)}\`, and that name is the wire type — so ` +
+          "anything already deployed against the old one stops matching",
+        decl.span,
+      ),
+    );
+  }
+
+  // The sidecars key on the qualified name, so they move with it (D98, the same half as `rename`).
+  let sawSidecar = false;
+  for (const [file, text] of Object.entries(editable.sources)) {
+    const base = file.replace(/\\/g, "/").split("/").pop() ?? file;
+    if (base !== "layout.json" && base !== "views.json") continue;
+    sawSidecar = true;
+    edits.push(...movedSidecarEdits(file, text, decl, moved));
+  }
+  if (!sawSidecar) {
+    diagnostics.push(
+      warn(
+        "sidecars-not-in-hand",
+        "no `layout.json` or `views.json` was given to this, so a saved position or lens entry keyed " +
+          "on the old package will not be carried over",
+        decl.span,
+      ),
+    );
+  }
+
+  return { op, describe: `move ${decl.id.name} to ${what.to}`, edits, diagnostics };
+}
+
+/**
+ * How a reference will be written once the import this move adds is in place.
+ *
+ * `referenceTo` answers for the model as it stands, so for a package that does not import the target
+ * yet it falls back to a fully qualified name and says so. That name happens to resolve, but it is not
+ * what anybody writes: with `import acme.retail.sales` in the file, the reference reads
+ * `sales.ReserveSeats`. Since this operation is adding that import, it writes the form that will be
+ * right rather than the form that was.
+ */
+function referenceAfterImport(
+  model: LinkedModel,
+  fromPkg: string,
+  target: NodeId,
+): { text: string; needsImport: boolean } {
+  const direct = referenceTo(model, fromPkg, target);
+  if (direct.problem === undefined) return { text: direct.text, needsImport: false };
+  const last = target.pkg.slice(target.pkg.lastIndexOf(".") + 1);
+  return { text: `${last}.${target.name}`, needsImport: true };
+}
+
+/**
+ * Where an `import` goes, and what has to follow it.
+ *
+ * After the imports already there, or after the `package` line when there are none — which is the only
+ * case that needs a blank line after it, since a `package` line is followed by one and an import block
+ * is not.
+ */
+function importInsertion(source: string, pkg: PackageIr): { start: number; after: string } {
+  const last = pkg.imports[pkg.imports.length - 1];
+  if (last !== undefined) {
+    const end = source.indexOf("\n", last.span.end - 1);
+    return { start: end < 0 ? source.length : end + 1, after: "" };
+  }
+  const span = pkg.span;
+  if (span === undefined) return { start: 0, after: "\n" };
+  const end = source.indexOf("\n", span.end - 1);
+  const at = end < 0 ? source.length : end + 1;
+  // One blank line between the `package` line and the first import, as every example writes it.
+  return { start: at, after: "\n" };
+}
+
+/** Sidecar keys for a declaration that changed package rather than name. */
+function movedSidecarEdits(
+  file: string,
+  source: string,
+  decl: Decl,
+  moved: NodeId,
+): TextEdit[] {
+  const kind = decl.id.kind;
+  const was = new Set([
+    `${kind}:${qualify(decl.id)}`.toLowerCase(),
+    ...(kind === "pipe" ? [`${kind}:${qualify(decl.id)}.dead`.toLowerCase()] : []),
+  ]);
+  const out: TextEdit[] = [];
+  for (const match of source.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    const inner = match[1] ?? "";
+    const at = match.index;
+    if (at === undefined || !was.has(inner.toLowerCase())) continue;
+    const dead = inner.toLowerCase().endsWith(".dead");
+    out.push({
+      file,
+      start: at,
+      end: at + match[0].length,
+      text: `"${kind}:${qualify(moved)}${dead ? ".dead" : ""}"`,
+    });
+  }
+  return out;
+}
 
 // ---- the data layer ---------------------------------------------------------
 

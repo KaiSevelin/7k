@@ -36,6 +36,7 @@ import {
   disconnectReact,
   invert,
   isPossible,
+  moveToPackage,
   removePipe,
   removeService,
   rename,
@@ -1804,5 +1805,253 @@ describe("the data layer", () => {
     check(files, addMessage(where(), { pkg: "shop", name: "Later", intent: "command" }));
     check(files, addRecord(where(), { pkg: "shop", name: "Buyer" }));
     check(files, addField(where(), { target: "Place", name: "note", type: "string" }));
+  });
+});
+
+/**
+ * `moveToPackage`.
+ *
+ * The specification calls it "the largest structural mutation in the API, the only one that moves text
+ * between files, and the only one that can change a message's wire type". All three are true and none
+ * is the hard part. The hard part is that a reference's text depends on where it is read from, so a
+ * move changes the answer for every reference *to* the declaration and every reference *inside* it —
+ * and an import is a consequence of that rather than a warning about it.
+ *
+ * So the property asserted throughout is: **what is left checks out**, with no name written that does
+ * not resolve. Four packages, because three directions have to be reachable without a cycle between
+ * them — which, writing this, turned out to be the thing the examples cannot demonstrate: they are
+ * coupled tightly enough that every move between two of their packages is refused.
+ */
+const SIDE = `package acme.side
+
+value Tag : string { length 1..16 }
+`;
+
+const UP = `package acme.up
+
+value Ref : string { length 1..32 }
+
+message Started v1.0 @event {
+  ref: Ref @role(businessKey)
+}
+
+pipe events : topic { retention 7d }
+
+service Beginner {
+  emits Started to events
+}
+`;
+
+const DOWN = `package acme.down
+
+import acme.up
+import acme.side
+
+// What a note carries besides its key.
+record Note {
+  ref: up.Ref
+  tag: side.Tag
+}
+
+message Noted v1.0 @event {
+  ref:  up.Ref @role(businessKey)
+  note: Note
+}
+
+message Idle v1.0 @event {
+  ref: up.Ref @role(businessKey)
+}
+
+pipe inbox : queue { retention 7d }
+
+service Watcher {
+  reacts up.Started from up.events { replies none }
+  emits  Noted to inbox
+}
+`;
+
+const OTHER = `package acme.other
+
+import acme.down
+
+message Echo v1.0 @event {
+  id:   uuid @role(businessKey)
+  note: down.Note
+}
+`;
+
+const MOVE_FILES = {
+  "side.7k": SIDE,
+  "up.7k": UP,
+  "down.7k": DOWN,
+  "other.7k": OTHER,
+};
+
+describe("moveToPackage", () => {
+  const where = (files: Readonly<Record<string, string>> = MOVE_FILES): Editable => {
+    const ws = buildWorkspace(
+      Object.entries(files)
+        .filter(([path]) => path.endsWith(".7k"))
+        .map(([path, source]) => ({ path, source })),
+    );
+    expect(ws.diagnostics.filter((d) => d.severity === "error").map((d) => d.message)).toEqual([]);
+    return { model: ws.model, trees: ws.trees, sources: files };
+  };
+
+  const errorsIn = (files: Readonly<Record<string, string>>): string[] =>
+    buildWorkspace(
+      Object.entries(files)
+        .filter(([path]) => path.endsWith(".7k"))
+        .map(([path, source]) => ({ path, source })),
+    )
+      .diagnostics.filter((d) => d.severity === "error")
+      .map((d) => `${d.code}: ${d.message}`);
+
+  const applied = (
+    mutation: Mutation,
+    files: Readonly<Record<string, string>> = MOVE_FILES,
+  ): Record<string, string> => {
+    expect(mutation.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(mutation.edits.length).toBeGreaterThan(0);
+    return check(files, mutation);
+  };
+
+  /** `Note` goes from `acme.down` up into `acme.up`, which is the move with all three directions in it. */
+  const moveNote = (files: Readonly<Record<string, string>> = MOVE_FILES): Record<string, string> =>
+    applied(moveToPackage(where(files), { decl: "Note", to: "acme.up" }), files);
+
+  it("moves the text, and what is left checks out", () => {
+    const after = moveNote();
+    expect(after["down.7k"]).not.toContain("record Note");
+    expect(after["up.7k"]).toContain("record Note");
+    expect(errorsIn(after)).toEqual([]);
+  });
+
+  it("rewrites the references inside it, for where it is going", () => {
+    const after = moveNote();
+    // `up.Ref` was how `acme.down` wrote it; from inside `acme.up` it is bare.
+    expect(after["up.7k"]).toContain("ref: Ref\n");
+    // `side.Tag` stays qualified, and `acme.up` now has to import it.
+    expect(after["up.7k"]).toContain("tag: side.Tag");
+    expect(after["up.7k"]).toContain("import acme.side");
+    expect(errorsIn(after)).toEqual([]);
+  });
+
+  it("rewrites the references to it, from each package's own point of view", () => {
+    const after = moveNote();
+    // `acme.down` wrote it bare and now reaches for it through its existing import.
+    expect(after["down.7k"]).toContain("note: up.Note");
+    // `acme.other` wrote it `down.Note` and now needs a different package entirely.
+    expect(after["other.7k"]).toContain("note: up.Note");
+    expect(after["other.7k"]).toContain("import acme.up");
+    expect(errorsIn(after)).toEqual([]);
+  });
+
+  it("adds no import that is already there", () => {
+    const after = moveNote();
+    expect(after["down.7k"]!.match(/import acme\.up/g)).toHaveLength(1);
+    expect(after["up.7k"]!.match(/import acme\.side/g)).toHaveLength(1);
+  });
+
+  it("takes its doc comment with it", () => {
+    const after = moveNote();
+    expect(after["up.7k"]).toContain("// What a note carries besides its key.");
+    expect(after["down.7k"]).not.toContain("What a note carries");
+  });
+
+  it("is invertible, and changes nothing outside the spans it edits", () => {
+    check(MOVE_FILES, moveToPackage(where(), { decl: "Note", to: "acme.up" }));
+  });
+
+  it("says that a message's wire type changes", () => {
+    // `Idle` is referenced by nothing, so the move itself is uncontroversial — which is what leaves
+    // the wire type as the only thing worth saying about it.
+    const mutation = moveToPackage(where(), { decl: "Idle", to: "acme.other" });
+    const said = mutation.diagnostics.find((d) => d.code === "wire-type-changes");
+    expect(said?.severity).toBe("warning");
+    expect(said?.message).toContain("acme.down.Idle");
+    expect(said?.message).toContain("acme.other.Idle");
+    expect(mutation.edits.length).toBeGreaterThan(0);
+  });
+
+  it("says nothing about a wire type for a record, which has none", () => {
+    expect(
+      moveToPackage(where(), { decl: "Note", to: "acme.up" }).diagnostics.map((d) => d.code),
+    ).not.toContain("wire-type-changes");
+  });
+
+  it("reaches a scenario that names it", () => {
+    const files = {
+      ...MOVE_FILES,
+      "down.scenario.7k": `scenarios for acme.down\n\nscenario S {\n  seed 1\n  expect no Idle on inbox\n}\n`,
+    };
+    const after = applied(
+      moveToPackage(where(files), { decl: "Idle", to: "acme.other" }),
+      files,
+    );
+    expect(after["down.scenario.7k"]).toContain("expect no other.Idle on inbox");
+    expect(after["down.7k"]).toContain("import acme.other");
+    expect(errorsIn(after)).toEqual([]);
+  });
+
+  it("carries a saved position and a lens entry with it", () => {
+    // `Beginner` goes to `acme.side`, which leaves `side` depending on `up` and nothing depending on
+    // `side` — the only service move in this fixture that is not a cycle.
+    const files = {
+      ...MOVE_FILES,
+      "layout.json": `{ "*": { "nodes": { "service:acme.up.Beginner": { "x": 1, "y": 2 } } } }\n`,
+      ".7k/views.json": `{ "A": { "include": ["service:acme.up.Beginner", "pipe:acme.up.events"] } }\n`,
+    };
+    const after = applied(moveToPackage(where(files), { decl: "Beginner", to: "acme.side" }), files);
+    expect(after["layout.json"]).toContain('"service:acme.side.Beginner"');
+    expect(after[".7k/views.json"]).toContain('"service:acme.side.Beginner"');
+    // And the one that did not move is untouched.
+    expect(after[".7k/views.json"]).toContain('"pipe:acme.up.events"');
+    expect(errorsIn(after)).toEqual([]);
+  });
+
+  it("says when it was given no sidecars", () => {
+    const mutation = moveToPackage(where(), { decl: "Note", to: "acme.up" });
+    expect(mutation.diagnostics.map((d) => d.code)).toContain("sidecars-not-in-hand");
+  });
+
+  describe("what it refuses", () => {
+    /**
+     * The one that makes this operation hard to get right rather than merely long.
+     *
+     * A move changes which package depends on which, so it can leave a cycle or an upward tier
+     * dependency behind — both errors, and both invisible until after the write. Asked of the rule
+     * itself rather than reimplemented: `packageDependencies` takes a relocation and answers as if the
+     * declaration were already there.
+     */
+    it("a move that would leave a dependency cycle", () => {
+      // `acme.down` depends on `acme.up`; moving `Started` down would make `up` depend on `down`.
+      const mutation = moveToPackage(where(), { decl: "Started", to: "acme.down" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("package-cycle");
+      expect(mutation.diagnostics[0]?.message).toContain("not checking out");
+    });
+
+    it("a name the target package already has", () => {
+      const files = {
+        ...MOVE_FILES,
+        "up.7k": UP.replace("pipe events", "record Note {\n  x: string\n}\n\npipe events"),
+      };
+      const mutation = moveToPackage(where(files), { decl: "acme.down.Note", to: "acme.up" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("name-taken");
+    });
+
+    it("a package it is already in", () => {
+      const mutation = moveToPackage(where(), { decl: "Note", to: "acme.down" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("already-there");
+    });
+
+    it("a package that is not there", () => {
+      const mutation = moveToPackage(where(), { decl: "Note", to: "acme.nowhere" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("no-such-package");
+    });
   });
 });

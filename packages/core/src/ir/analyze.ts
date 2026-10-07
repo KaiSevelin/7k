@@ -73,9 +73,27 @@ export function analyze(model: LinkedModel): Diagnostic[] {
 
 // ---- package dependency direction ------------------------------------------
 
+/**
+ * A declaration pretended to be somewhere it is not.
+ *
+ * `moveToPackage` has to know whether a move would leave a cycle or an upward dependency behind, and
+ * the only honest way to answer that is to ask the rule rather than to reimplement it. So the walk
+ * takes an optional relocation and attributes that declaration — and every reference to it — to the
+ * package it is going to. One implementation of "which package depends on which", asked twice.
+ */
+export interface Relocation {
+  readonly key: string;
+  readonly to: string;
+}
+
 /** Which packages a package depends on, and one edge that proves each. */
-function packageEdges(model: LinkedModel): Map<string, Map<string, Ref>> {
+export function packageEdges(
+  model: LinkedModel,
+  moved?: Relocation,
+): Map<string, Map<string, Ref>> {
   const edges = new Map<string, Map<string, Ref>>();
+  const where = (pkg: string, name: string): string =>
+    moved !== undefined && symbolKey(pkg, name) === moved.key ? moved.to : pkg;
   const add = (from: string, to: string, via: Ref): void => {
     if (from === to || to === "") return;
     let row = edges.get(from);
@@ -88,11 +106,11 @@ function packageEdges(model: LinkedModel): Map<string, Map<string, Ref>> {
 
   const edgeFor = (from: string, ref: Ref): void => {
     const id = model.resolve(ref);
-    if (id !== undefined) add(from, id.pkg, ref);
+    if (id !== undefined) add(from, where(id.pkg, id.name), ref);
   };
 
   for (const d of model.decls) {
-    const from = d.id.pkg;
+    const from = where(d.id.pkg, d.id.name);
     if (d.kind === "service") {
       for (const e of d.emits) {
         edgeFor(from, e.message);
@@ -115,9 +133,9 @@ function packageEdges(model: LinkedModel): Map<string, Map<string, Ref>> {
   return edges;
 }
 
-function packageDependencies(model: LinkedModel): Diagnostic[] {
+export function packageDependencies(model: LinkedModel, moved?: Relocation): Diagnostic[] {
   const out: Diagnostic[] = [];
-  const edges = packageEdges(model);
+  const edges = packageEdges(model, moved);
 
   // ---- cycles, by depth-first search over the aggregated edges -------------
   const state = new Map<string, "open" | "done">();
