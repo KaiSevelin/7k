@@ -58,8 +58,11 @@ export {
 export {
   addAdvance,
   addExpect,
+  addField,
+  addMessage,
   addPipe,
   addPublish,
+  addRecord,
   addSaga,
   addScenario,
   addService,

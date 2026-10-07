@@ -351,6 +351,198 @@ export function addPipe(
 }
 
 
+// ---- the data layer ---------------------------------------------------------
+
+/**
+ * `addMessage`, `addRecord` and `addField` — the three `20-ir.md` section 7 lists under "data" that a
+ * composer needs to turn a payload it cannot build into one it can.
+ *
+ * **Empty bodies, on purpose.** A message with no fields and a record with no fields both check out,
+ * and what a message carries is the decision the person adding it is in the middle of making. This is
+ * `addSaga`'s stance — "no steps and no terminals: both are decisions, and the checker says so until
+ * they are made" — and the checker does say so: the moment anything reacts to a message, `dedupe-key`
+ * wants a `@role(businessKey)`.
+ *
+ * **No default intent.** `@command`, `@event` and `@query` are not three spellings of one thing: a
+ * command instructs and an event states a fact, so they say opposite things about who is responsible,
+ * and a query carries no deduplication key at all (D100). Unlike `addPipe`'s `retention 7d` there is no
+ * neutral value to fall back on, so one is written when it is given and left out when it is not.
+ *
+ * **A field's type is checked.** It is a kernel name or something declared and visible from the
+ * package, which is exactly what the linker would resolve — so a type that would not resolve is
+ * refused here rather than written and then reported.
+ */
+
+const KERNEL_TYPES = new Set([
+  "bool",
+  "int",
+  "float",
+  "string",
+  "bytes",
+  "uuid",
+  "instant",
+  "duration",
+  "date",
+  "decimal",
+]);
+
+const ROLES = new Set(["correlation", "causation", "partitionKey", "businessKey", "subject"]);
+
+/** `message M v1.0 @event { }`, appended to a package's file. */
+export function addMessage(
+  editable: Editable,
+  what: AddTo & {
+    /** `v1.0` unless told otherwise: a message nobody has versioned yet is at its first. */
+    readonly version?: string;
+    readonly intent?: "command" | "event" | "query";
+  },
+): Mutation {
+  const version = what.version ?? "v1.0";
+  if (!/^v\d+\.\d+$/.test(version)) {
+    return refuse("addMessage", `add message ${what.name} to ${what.pkg}`, [
+      error("not-a-version", `\`${version}\` is not a version; they read \`v1.0\``, nowhere("")),
+    ]);
+  }
+  const intent = what.intent === undefined ? "" : ` @${what.intent}`;
+  return addDecl(
+    editable,
+    what,
+    "addMessage",
+    `message ${what.name} ${version}${intent} {\n}\n`,
+  );
+}
+
+/** `record R { }`, appended to a package's file. */
+export function addRecord(editable: Editable, what: AddTo): Mutation {
+  return addDecl(editable, what, "addRecord", `record ${what.name} {\n}\n`);
+}
+
+/**
+ * `  name: type` — a field, added to a record, a message or an envelope.
+ *
+ * Appended inside the body, before the closing brace, because a record's fields are read in the order
+ * they are written and a new one belongs at the end of what is already there rather than wherever an
+ * insertion point happened to be convenient.
+ *
+ * **A role is checked against the five that exist** and, where it is one only one field may claim,
+ * against whether something already claims it — `02-contract.md` section 2 says a role claimed twice
+ * makes the model ambiguous, so the second claim is refused with the first one named.
+ */
+export function addField(
+  editable: Editable,
+  what: {
+    /** The record, message or envelope to add to. */
+    readonly target: string;
+    readonly name: string;
+    /** A kernel name, or a value, record or enum visible from the package. */
+    readonly type: string;
+    readonly optional?: boolean;
+    readonly role?: string;
+  },
+): Mutation {
+  const op = "addField";
+  const describe = `add ${what.name} to ${what.target}`;
+  const { model } = editable;
+
+  const target = model.decls.find(
+    (d) =>
+      (d.kind === "record" || d.kind === "message" || d.kind === "envelope") &&
+      matches(d, what.target),
+  );
+  if (target === undefined || (target.kind !== "record" && target.kind !== "message" && target.kind !== "envelope")) {
+    return refuse(op, describe, [
+      error(
+        "no-such-target",
+        `no record, message or envelope named \`${what.target}\``,
+        nowhere(""),
+      ),
+    ]);
+  }
+
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(what.name)) {
+    return refuse(op, describe, [
+      error("not-an-identifier", `\`${what.name}\` is not a field name 7K can read`, target.span),
+    ]);
+  }
+
+  // Field names within one record are a namespace of their own, and case-folded like everything else
+  // (D40): two fields differing only in case would make a payload's keys ambiguous.
+  const clash = target.fields.find((f) => f.name.toLowerCase() === what.name.toLowerCase());
+  if (clash !== undefined) {
+    return refuse(op, describe, [
+      error(
+        "field-taken",
+        `\`${target.id.name}\` already has a field \`${clash.name}\`, and names fold case`,
+        clash.span,
+      ),
+    ]);
+  }
+
+  // A list is written `[T]` in the grammar; the element is what has to resolve.
+  const element = /^\[(.+)\]$/.exec(what.type)?.[1]?.trim() ?? what.type;
+  const known = KERNEL_TYPES.has(element) || model.lookup(target.id.pkg, element) !== undefined;
+  if (!known) {
+    return refuse(op, describe, [
+      error(
+        "no-such-type",
+        `\`${element}\` is not a kernel type and nothing visible from \`${target.id.pkg}\` declares it`,
+        target.span,
+      ),
+    ]);
+  }
+
+  if (what.role !== undefined && !ROLES.has(what.role)) {
+    return refuse(op, describe, [
+      error(
+        "no-such-role",
+        `\`${what.role}\` is not a role; they are ${[...ROLES].map((r) => `\`${r}\``).join(", ")}`,
+        target.span,
+      ),
+    ]);
+  }
+  if (what.role !== undefined) {
+    const already = target.fields.find((f) => f.role === what.role);
+    if (already !== undefined) {
+      return refuse(op, describe, [
+        error(
+          "role-claimed",
+          `\`${already.name}\` already claims \`@role(${what.role})\` on \`${target.id.name}\`, and a ` +
+            "role claimed twice leaves the model ambiguous",
+          already.span,
+        ),
+      ]);
+    }
+  }
+
+  const source = editable.sources[target.file];
+  const node = nodeFor(editable, target);
+  const brace = node === undefined ? undefined : closingBrace(node);
+  if (source === undefined || node === undefined || brace === undefined) {
+    return refuse(op, describe, [
+      error("no-tree", `\`${target.file}\` was not parsed, so it cannot be edited`, target.span),
+    ]);
+  }
+
+  const indent = indentOf(source, node);
+  const role = what.role === undefined ? "" : ` @role(${what.role})`;
+  const optional = what.optional === true ? "?" : "";
+  const at = source.lastIndexOf("\n", brace.start) + 1;
+
+  return {
+    op,
+    describe: `add ${what.name} to ${target.id.name}`,
+    edits: [
+      {
+        file: target.file,
+        start: at,
+        end: at,
+        text: `${indent}${what.name}: ${what.type}${optional}${role}\n`,
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
 // ---- sagas ------------------------------------------------------------------
 
 /**

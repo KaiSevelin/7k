@@ -15,6 +15,9 @@ import { describe, expect, it } from "vitest";
 import {
   addAdvance,
   addExpect,
+  addField,
+  addMessage,
+  addRecord,
   addPipe,
   addPublish,
   addScenario,
@@ -1682,5 +1685,124 @@ describe("a body on a scenario step", () => {
     )["shop.scenario.7k"]!;
     expect(after).toContain("} count 2");
     expect(stillChecks({ ...SCEN_FILES, "shop.scenario.7k": after })).toEqual([]);
+  });
+});
+
+/**
+ * The data operations.
+ *
+ * `addMessage` and `addRecord` write empty bodies, which is `addSaga`'s stance and for the same reason:
+ * what a message carries is the decision the person adding it is in the middle of making. So what is
+ * worth asserting is that an empty one checks out, that `addField` makes it useful, and the four things
+ * `addField` refuses — all of which are things the checker would otherwise report after the write.
+ */
+describe("the data layer", () => {
+  const files = { "a.7k": REMOVABLE };
+  const where = (source = REMOVABLE): Editable => editable({ "a.7k": source });
+  const applied = (mutation: Mutation, source = REMOVABLE): string => {
+    expect(mutation.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    return check({ "a.7k": source }, mutation)["a.7k"]!;
+  };
+  const errorsIn = (source: string): string[] =>
+    buildWorkspace([{ path: "a.7k", source }])
+      .diagnostics.filter((d) => d.severity === "error")
+      .map((d) => `${d.code}: ${d.message}`);
+
+  it("writes a message with a version and no fields, and it checks out", () => {
+    const after = applied(addMessage(where(), { pkg: "shop", name: "Later", intent: "event" }));
+    expect(after).toContain("message Later v1.0 @event {\n}");
+    expect(errorsIn(after)).toEqual([]);
+  });
+
+  it("leaves the intent out when it was not given, since there is no neutral one", () => {
+    const after = applied(addMessage(where(), { pkg: "shop", name: "Later" }));
+    // Asserted on the line it wrote: the fixture has a `@command` of its own.
+    expect(after).toContain("message Later v1.0 {");
+    expect(after).not.toMatch(/message Later v1\.0 @/);
+    expect(errorsIn(after)).toEqual([]);
+  });
+
+  it("refuses something that is not a version", () => {
+    const mutation = addMessage(where(), { pkg: "shop", name: "Later", version: "1" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("not-a-version");
+  });
+
+  it("writes a record, and a field into it", () => {
+    const one = applied(addRecord(where(), { pkg: "shop", name: "Buyer" }));
+    expect(one).toContain("record Buyer {\n}");
+    const two = applied(
+      addField(where(one), { target: "Buyer", name: "email", type: "string" }),
+      one,
+    );
+    expect(two).toContain("record Buyer {\n  email: string\n}");
+    expect(errorsIn(two)).toEqual([]);
+  });
+
+  it("writes optional, a role, and a list", () => {
+    const one = applied(addRecord(where(), { pkg: "shop", name: "Buyer" }));
+    let text = one;
+    for (const field of [
+      { name: "ref", type: "uuid", role: "businessKey" },
+      { name: "note", type: "string", optional: true },
+      { name: "tags", type: "[string]" },
+    ]) {
+      text = applied(addField(where(text), { target: "Buyer", ...field }), text);
+    }
+    expect(text).toContain("ref: uuid @role(businessKey)");
+    expect(text).toContain("note: string?");
+    expect(text).toContain("tags: [string]");
+    expect(errorsIn(text)).toEqual([]);
+  });
+
+  it("takes a declared type, and refuses one nothing declares", () => {
+    const one = applied(addRecord(where(), { pkg: "shop", name: "Buyer" }));
+    const good = addField(where(one), { target: "Buyer", name: "what", type: "Place" });
+    expect(good.edits.length).toBe(1);
+
+    const bad = addField(where(one), { target: "Buyer", name: "what", type: "Nothing" });
+    expect(bad.edits).toEqual([]);
+    expect(bad.diagnostics[0]?.code).toBe("no-such-type");
+  });
+
+  it("refuses a field name the record already has, folding case", () => {
+    const mutation = addField(where(), { target: "Place", name: "ORDERID", type: "string" });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("field-taken");
+  });
+
+  it("refuses a role a field already claims, and names it", () => {
+    const mutation = addField(where(), {
+      target: "Place",
+      name: "other",
+      type: "uuid",
+      role: "businessKey",
+    });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("role-claimed");
+    expect(mutation.diagnostics[0]?.message).toContain("orderId");
+  });
+
+  it("refuses a role that is not one of the five", () => {
+    const mutation = addField(where(), {
+      target: "Place",
+      name: "other",
+      type: "uuid",
+      role: "owner",
+    });
+    expect(mutation.edits).toEqual([]);
+    expect(mutation.diagnostics[0]?.code).toBe("no-such-role");
+  });
+
+  it("adds to a message as readily as to a record, keeping its indentation", () => {
+    const after = applied(addField(where(), { target: "Place", name: "note", type: "string" }));
+    expect(after).toContain("  orderId: uuid @role(businessKey)\n  note: string\n}");
+    expect(errorsIn(after)).toEqual([]);
+  });
+
+  it("is invertible, and changes nothing outside its span", () => {
+    check(files, addMessage(where(), { pkg: "shop", name: "Later", intent: "command" }));
+    check(files, addRecord(where(), { pkg: "shop", name: "Buyer" }));
+    check(files, addField(where(), { target: "Place", name: "note", type: "string" }));
   });
 });
