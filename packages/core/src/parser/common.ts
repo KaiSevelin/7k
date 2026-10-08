@@ -104,7 +104,22 @@ export function typeRef(c: Cursor): CstNode {
  */
 export function constraint(c: Cursor): CstNode {
   const parts: CstChild[] = [c.advance()]; // the constraint name
+
+  /**
+   * A leading sign, which lexes as its own token.
+   *
+   * Without this, `range -1000..1000` did not parse at all: `-` is punctuation, the argument loop
+   * takes only value tokens, and the whole constraint was reported as "expected a constraint". So an
+   * `int` that can go negative — a stock delta, a balance adjustment, a temperature — could not be
+   * given a lower bound in the language, and the checker asking for one was asking for something
+   * nobody could write.
+   */
+  const sign = (): void => {
+    if (c.atPunct("-") && c.peek(1).kind === "int") parts.push(c.advance());
+  };
+
   for (;;) {
+    sign();
     if (atStatementEnd(c)) break;
     if (c.atPunct("(")) {
       parts.push(c.advance());
@@ -124,6 +139,7 @@ export function constraint(c: Cursor): CstNode {
       }
       if (c.atPunct("..")) {
         parts.push(c.advance());
+        sign();
         if (c.atKind("int", "decimal", "duration", "size")) parts.push(c.advance());
       }
       if (!c.atPunct(",")) break;
@@ -133,6 +149,7 @@ export function constraint(c: Cursor): CstNode {
     if (c.atPunct("..")) {
       // An open-ended range with no lower bound: `range ..0`.
       parts.push(c.advance());
+      sign();
       if (c.atKind("int", "decimal", "duration", "size")) parts.push(c.advance());
       break;
     }

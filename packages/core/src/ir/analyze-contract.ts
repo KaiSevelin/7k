@@ -810,29 +810,57 @@ function impossibleConstraints(model: LinkedModel): Diagnostic[] {
  * past 2^53 − 1 comes back changed — `90071992547409921` parses as `...920`, silently, before any
  * validator sees it.
  *
- * A field with no `range` is the case where nobody has decided. It is almost always a count or an
- * identifier that stays small, and demanding the string form for all of them would change the wire
- * form of most `int` fields in every provider for a risk their authors have usually already ruled out
- * in their heads. So this asks them to write it down instead.
+ * A field whose declared range does not *prove* it stays inside that is the case where nobody has
+ * decided. It is almost always a count or an identifier that stays small, and demanding the string
+ * form for all of them would change the wire form of most `int` fields in every provider for a risk
+ * their authors have usually already ruled out in their heads. So this asks them to write it down.
  *
- * A warning rather than an error, because a model that has not said is still a model — and because
- * the cost is only real past a threshold most fields never approach. `04-process.md`'s own rule
+ * **Half a range is not a range, for this question.** `range 0..` bounds nothing above, so the field
+ * can still hold 2^60 — the first version of this check asked only whether a `range` clause existed
+ * and went quiet on exactly that idiom, which is the commonest way to write an unbounded counter.
+ *
+ * It is deliberately more eager than `intIsWide`, and the two are right to differ. That one decides
+ * an encoding, so it moves only on a bound somebody declared and that is genuinely outside. This one
+ * only offers advice, so it fires wherever the model has not shown the field fits. Conservative where
+ * it costs a wire format, liberal where it costs a line.
+ *
+ * A warning rather than an error, because a model that has not said is still a model. `04-process.md`
  * applies: a warning nobody can act on is worse than none, and this one names exactly what to type.
  */
 function intUnbounded(model: LinkedModel): Diagnostic[] {
   const out: Diagnostic[] = [];
+  const SAFE = 9007199254740991n;
+
+  /** Whether the declared bounds, taken together, put the field inside what a number carries. */
+  const boundedWithinSafe = (constraints: readonly ConstraintIr[]): boolean => {
+    let min: bigint | undefined;
+    let max: bigint | undefined;
+    for (const c of constraints) {
+      if (c.name !== "range") continue;
+      const args = c.args.map((a) => a.trim());
+      const at = args.indexOf("..");
+      const whole = (text: string | undefined): bigint | undefined =>
+        text !== undefined && /^-?\d+$/.test(text) ? BigInt(text) : undefined;
+      const low = at < 0 ? whole(args[0]) : whole(args[at - 1]);
+      const high = at < 0 ? whole(args[0]) : whole(args[at + 1]);
+      if (low !== undefined && (min === undefined || low > min)) min = low;
+      if (high !== undefined && (max === undefined || high < max)) max = high;
+    }
+    return min !== undefined && max !== undefined && min >= -SAFE && max <= SAFE;
+  };
 
   const look = (type: TypeIr, constraints: readonly ConstraintIr[], what: string, span: Span): void => {
     // The field's own type only. A `value` that refines `int` is checked where it is declared, and
     // reporting it again at every use would be the same fact several times.
     if (type.t !== "kernel" || type.name !== "int") return;
-    if (constraints.some((c) => c.name === "range")) return;
+    if (boundedWithinSafe(constraints)) return;
     out.push({
       code: "int-unbounded",
       severity: "warning",
       message:
-        `\`${what}\` is an \`int\` with no \`range\`, so it may hold values beyond ±(2^53 − 1), which ` +
-        "a JSON number does not carry exactly — a `range` says what it holds and settles the encoding",
+        `\`${what}\` is an \`int\` whose \`range\` does not bound it within ±(2^53 − 1), so it may hold ` +
+        "values a JSON number does not carry exactly — a range with both ends says what it holds and " +
+        "settles the encoding",
       span,
     });
   };

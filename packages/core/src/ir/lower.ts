@@ -187,11 +187,26 @@ function lowerType(ctx: Ctx, n: CstNode | undefined): TypeIr {
 const lowerConstraint = (ctx: Ctx, n: CstNode): ConstraintIr => {
   const toks = childTokens(n);
   const name = toks[0]?.text.toLowerCase() ?? "";
-  return {
-    name,
-    args: toks.slice(1).filter((t) => t.kind !== "punct" || t.text === "..").map((t) => t.text),
-    span: spanOf(ctx.file, n),
-  };
+
+  // A sign lexes as its own token and is part of the number it precedes, not an argument of its own:
+  // `range -5..5` is two bounds and not four. Joined here rather than in every reader, because every
+  // reader of `args` would otherwise have to know.
+  const args: string[] = [];
+  let pending = "";
+  for (const t of toks.slice(1)) {
+    if (t.kind === "punct" && t.text === "-") {
+      pending = "-";
+      continue;
+    }
+    if (t.kind === "punct" && t.text !== "..") {
+      pending = "";
+      continue;
+    }
+    args.push(`${pending}${t.text}`);
+    pending = "";
+  }
+
+  return { name, args, span: spanOf(ctx.file, n) };
 };
 
 function constraintsOf(ctx: Ctx, n: CstNode): ConstraintIr[] {

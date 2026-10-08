@@ -233,6 +233,64 @@ message When v1.0 @event {
  * that there is now one place to ask, so that when they do make it they all get one answer rather
  * than each deciding what "can exceed" means.
  */
+/** Written this way because a literal newline inside a string reads as a broken one. */
+const NEWLINE = String.fromCharCode(10);
+
+/**
+ * A bound below zero, which the grammar could not express at all.
+ *
+ * `range -5..5` reported "expected a constraint" and nothing parsed: a sign lexes as its own token
+ * and the argument loop took only value tokens. So a signed quantity — a stock delta, a balance
+ * adjustment, a temperature — could not be given a lower bound in the language.
+ *
+ * Found by `int-unbounded`, which asks an author to bound both ends of an `int`, and would have been
+ * asking for something nobody could write. `04-process.md`: a warning nobody can act on is worse
+ * than none.
+ */
+describe("a range below zero", () => {
+  const judge = (constraint: string, value: number): number => {
+    const ws = buildWorkspace([
+      {
+        path: "t.7k",
+        source: `package t
+value V : int { ${constraint} }
+message M v1.0 @event { id: uuid @role(businessKey); v: V }
+`,
+      },
+    ]);
+    expect(ws.diagnostics.filter((d) => d.severity === "error").map((d) => d.message)).toEqual([]);
+    const decl = declOf<MessageIr>(ws.model, "M");
+    return validate(ws.model, specOfDecl(ws.model, decl, [], 0), {
+      id: "00000000-0000-7000-8000-000000000000",
+      v: value,
+    } as never).length;
+  };
+
+  it("parses, and binds at both ends", () => {
+    expect(judge("range -5..5", -6), "-6").toBeGreaterThan(0);
+    expect(judge("range -5..5", -5), "-5").toBe(0);
+    expect(judge("range -5..5", 5), "5").toBe(0);
+    expect(judge("range -5..5", 6), "6").toBeGreaterThan(0);
+  });
+
+  it("works half-open in either direction", () => {
+    expect(judge("range -5..", -6), "below an open top").toBeGreaterThan(0);
+    expect(judge("range -5..", 1000), "above an open top").toBe(0);
+    expect(judge("range ..-5", -6), "below an open bottom").toBe(0);
+    expect(judge("range ..-5", 0), "above an open bottom").toBeGreaterThan(0);
+  });
+
+  /** The sign belongs to the number it precedes: `range -5..5` is two bounds, not four. */
+  it("does not leave the sign as an argument of its own", () => {
+    const ws = buildWorkspace([
+      { path: "t.7k", source: ["package t", "value V : int { range -5..5 }", ""].join(NEWLINE) },
+    ]);
+    const value = ws.model.decls.find((d) => d.id.name === "V");
+    const args = value?.kind === "value" ? value.constraints[0]?.args : undefined;
+    expect(args).toEqual(["-5", "..", "5"]);
+  });
+});
+
 describe("the form an int travels in", () => {
   const spec = (args: string[] | undefined): Spec => ({
     shape: "scalar",
