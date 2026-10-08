@@ -26,6 +26,7 @@ package acme
 
 value Email : string { length 5..254; pattern /^[^@]+@[^@]+$/ }
 value Line  : string { length 1..40; normalize trim, collapseSpace }
+value Code  : string { length 3; pattern /^[A-Z]{3}$/ }
 
 enum Channel { Web, Kiosk }
 
@@ -46,6 +47,8 @@ message Order v1.0 @command {
   total:   Money
   lines:   [Line1] { size 1..20 }
   note:    Line?
+  rates:   map<Code, Money>
+  token:   bytes
 
   invariant total.currency == lines[].price.currency
 }
@@ -70,6 +73,8 @@ const GOOD = {
   channel: "Web",
   total: { amount: "19.99", currency: "SEK" },
   lines: [{ sku: "SKU-1", price: { amount: "19.99", currency: "SEK" } }],
+  rates: { SEK: { amount: "1.00", currency: "SEK" } },
+  token: "AAEC",
 };
 
 describe("a spec resolves through the chain a value came from", () => {
@@ -242,5 +247,61 @@ describe("a record validates on its own, not only inside a message", () => {
     const spec = specOfDecl(m, declOf<RecordIr>(m, "Money"), [], 0);
     expect(validate(m, spec, { amount: "1.00", currency: "SEK" })).toEqual([]);
     expect(validate(m, spec, { amount: "1.00", currency: "X" }).length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Two things nothing checked, found by comparing this runtime against a provider's generated decoder.
+ *
+ * Both are the same kind of gap: a declaration the model makes and this did not read. A map's key is a
+ * declared type like any other, and `bytes` has a wire form `01-kernel.md` section 7 states — and the
+ * diagnostic for it said "expected base64url bytes" while checking only that it was a string, which is
+ * a message asserting a check that had not happened.
+ */
+describe("what a declaration says about a map and about bytes", () => {
+  it("validates a map's keys against their declared type", () => {
+    const m = model();
+    const problems = validate(m, order(m), {
+      ...GOOD,
+      rates: { sek: { amount: "1.00", currency: "SEK" } },
+    });
+    expect(problems.map((p) => p.path)).toContain("rates.sek");
+    expect(problems.find((p) => p.path === "rates.sek")?.message).toContain("does not match");
+  });
+
+  it("still validates a map's values", () => {
+    const m = model();
+    const problems = validate(m, order(m), {
+      ...GOOD,
+      rates: { SEK: { amount: "-1.00", currency: "SEK" } },
+    });
+    expect(problems.map((p) => p.path)).toContain("rates.SEK.amount");
+  });
+
+  it("accepts a map whose keys and values both hold up", () => {
+    const m = model();
+    expect(validate(m, order(m), GOOD)).toEqual([]);
+  });
+
+  it("rejects bytes that are not base64url", () => {
+    const m = model();
+    const problems = validate(m, order(m), { ...GOOD, token: "not base64!!" });
+    expect(problems.map((p) => `${p.path}: ${p.message}`)).toEqual([
+      "token: expected base64url bytes",
+    ]);
+  });
+
+  it("still says what it got when bytes are not a string at all", () => {
+    const m = model();
+    const problems = validate(m, order(m), { ...GOOD, token: 7 });
+    expect(problems[0]?.message).toContain("got a number");
+  });
+
+  it("takes base64url without padding, which is the form the spec states", () => {
+    const m = model();
+    expect(validate(m, order(m), { ...GOOD, token: "a-b_c" })).toEqual([]);
+    // Padding and the non-url alphabet are what base64url does not have.
+    expect(validate(m, order(m), { ...GOOD, token: "AA==" })).not.toEqual([]);
+    expect(validate(m, order(m), { ...GOOD, token: "a+b/c" })).not.toEqual([]);
   });
 });

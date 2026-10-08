@@ -38,6 +38,15 @@ export interface Spec {
   readonly members?: readonly string[];
   readonly item?: Spec;
   readonly value?: Spec;
+  /**
+   * A map's key type, which is a declared type like any other and may carry constraints.
+   *
+   * `map<Currency, Money>` says as much about its keys as about its values, and this did not carry
+   * them — so a key breaking `pattern /^[A-Z]{3}$/` passed everything that validates through here: the
+   * sandbox's check on receipt, `publish`, and Spider's composer. The Node provider's generated
+   * decoder does check them, which is how the decode equivalence harness found the difference.
+   */
+  readonly key?: Spec;
   /** Contract rules over this record's own data, evaluated once its fields are checked. */
   readonly invariants?: readonly Predicate[];
   /** For a diagnostic: the name as declared. */
@@ -76,6 +85,7 @@ export function specOf(
     case "map":
       return {
         shape: "map",
+        key: specOf(model, type.key, [], depth + 1),
         value: specOf(model, type.value, [], depth + 1),
         constraints: extra,
       };
@@ -281,6 +291,8 @@ export interface Problem {
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DURATION = /^(P|\d+(ms|s|m|h|d))/;
+/** `01-kernel.md` section 7: `bytes` travels as base64url, which has no padding and no `+` or `/`. */
+const BASE64URL = /^[A-Za-z0-9_-]*$/;
 
 /**
  * What an invariant may read besides the value it is declared on.
@@ -379,10 +391,12 @@ export function validate(
         out.push({ path: at, message: `expected an object, got ${typeOf(value)}` });
         return out;
       }
-      if (spec.value !== undefined) {
-        for (const [k, v] of Object.entries(value as Record<string, JsonValue>)) {
-          validate(model, spec.value, v, `${path}.${k}`, out, context);
-        }
+      for (const [k, v] of Object.entries(value as Record<string, JsonValue>)) {
+        // The key first, and against its own declared type: a key is a value on the wire like any
+        // other, and `map<Currency, Money>` constrains both halves. Reported at the key's own path,
+        // so "which one" is answerable.
+        if (spec.key !== undefined) validate(model, spec.key, k, `${path}.${k}`, out, context);
+        if (spec.value !== undefined) validate(model, spec.value, v, `${path}.${k}`, out, context);
       }
       return out;
     }
@@ -549,7 +563,11 @@ function validateScalar(spec: Spec, value: JsonValue, at: string, out: Problem[]
       return out;
 
     case "bytes":
+      // The message said "expected base64url bytes" and checked only that it was a string, which is a
+      // diagnostic asserting a check that had not happened. `01-kernel.md` section 7 makes base64url
+      // the wire form, so a string that is not one is not `bytes`.
       if (typeof value !== "string") push(`expected base64url bytes, got ${typeOf(value)}`);
+      else if (!BASE64URL.test(value)) push("expected base64url bytes");
       return out;
 
     case "decimal": {
