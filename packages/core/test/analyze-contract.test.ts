@@ -83,6 +83,9 @@ const findings = (model: string, shared = BASE): Diagnostic[] => {
   return [...w.diagnostics];
 };
 
+/** A newline, written this way because a literal one inside a replacement reads as a broken string. */
+const BREAK = String.fromCharCode(10);
+
 const codes = (model: string, shared = BASE): string[] =>
   [...new Set(findings(model, shared).map((d) => d.code))].sort();
 
@@ -256,6 +259,70 @@ describe("value refinement", () => {
   it("finds a minimum below the base's", () => {
     const broken = BASE.replace("value Small  : Qty    { range 1..10 }", "value Small  : Qty    { range 0..10 }");
     expect(messageFor(MODEL, "value-narrowing", broken)).toContain("minimum of 0");
+  });
+
+  /**
+   * A rule nothing can satisfy, which is the same fault from the other side.
+   *
+   * `valueNarrowing` catches a refinement that admits too much. These catch one that admits nothing:
+   * `length 5..3` is not a narrow rule but an empty one, and a model holding it checks out, draws and
+   * generates before rejecting every message that reaches the field — for a reason that was decidable
+   * from the model alone.
+   */
+  it("finds a window whose ends cross", () => {
+    const broken = BASE.replace("value Line60 : Line   { length 1..60 }", "value Line60 : Line   { length 60..1 }");
+    expect(codes(MODEL, broken)).toContain("impossible-constraint");
+    expect(messageFor(MODEL, "impossible-constraint", broken)).toContain("nothing can satisfy it");
+  });
+
+  it("finds two clauses on one axis that cross, not only one written backwards", () => {
+    const broken = BASE.replace(
+      "value Qty    : int    { range 1..100 }",
+      "value Qty    : int    { range 1..100; range 200..300 }",
+    );
+    expect(codes(MODEL, broken)).toContain("impossible-constraint");
+  });
+
+  it("finds it on a field as well as on a value", () => {
+    const broken = MODEL.replace(
+      "message Do   v1.0 @command { k: shared.Line60 @role(businessKey) }",
+      "message Do   v1.0 @command { k: shared.Line60 @role(businessKey); tags: [string] { size 9..2 } }",
+    );
+    expect(messageFor(broken, "impossible-constraint")).toContain("Do.tags");
+  });
+
+  /**
+   * The worst of them to find by hand: normalization runs on receipt, before validation
+   * (`01-kernel.md` section 3), so a bare `validate` accepts it and every running system rejects it.
+   */
+  it("finds a pattern the normalization in front of it has made unmatchable", () => {
+    const broken = BASE.replace(
+      "value Line   : string { length 1..255; normalize trim }",
+      "value Line   : string { length 1..255; normalize upper; pattern /^[a-z]+$/ }",
+    );
+    expect(codes(MODEL, broken)).toContain("impossible-constraint");
+    expect(messageFor(MODEL, "impossible-constraint", broken)).toContain("unmatchable");
+  });
+
+  /**
+   * And the negatives, with the care this file's header asks for: a check that fires where an author
+   * disagrees costs more than one that is missing.
+   */
+  it("says nothing about a pattern the normalization leaves satisfiable", () => {
+    for (const pattern of ["/^[A-Z]+$/", "/^[a-zA-Z]+$/", "/^[0-9]+$/"]) {
+      const fine = BASE.replace(
+        "value Line   : string { length 1..255; normalize trim }",
+        `value Line   : string { length 1..255; normalize upper; pattern ${pattern} }`,
+      );
+      expect(codes(MODEL, fine), pattern).not.toContain("impossible-constraint");
+    }
+  });
+
+  it("says nothing about a window that is merely narrow, including an exact one", () => {
+    for (const window of ["length 1..60", "length 3", "length 60..60"]) {
+      const fine = BASE.replace("value Line60 : Line   { length 1..60 }", `value Line60 : Line   { ${window} }`);
+      expect(codes(MODEL, fine), window).not.toContain("impossible-constraint");
+    }
   });
 
   it("finds a multipleOf the base does not divide", () => {

@@ -288,7 +288,54 @@ export interface Problem {
   readonly message: string;
 }
 
-const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/;
+const CIVIL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Whether a date of the right *shape* is also a day that happened.
+ *
+ * A regex can say `\d{2}` and cannot say "at most twelve", so the shape check alone accepted
+ * `2026-13-01`, `2026-02-31` and `2026-01-01T25:00:00Z`. The kernel calls `date` a civil date and
+ * `instant` RFC 3339, and neither of those is a string that merely looks like one — so this was a
+ * declaration the language made and nothing enforced.
+ *
+ * It mattered beyond tidiness, because the implementations did not agree. C# holds an `instant` in a
+ * `DateTimeOffset` and a `date` in a `DateOnly`, both of which refuse all three; Core and the
+ * TypeScript decoder accepted them. A scenario could therefore publish a payload the sandbox called
+ * valid, deliver it, and have a C# service fail to deserialize it — the model saying `date` while two
+ * implementations meant different things by it.
+ *
+ * Leap seconds are refused, which is a choice rather than an oversight: RFC 3339 permits `:60` and
+ * .NET refuses it. Agreement between implementations is the point of this function, so it follows the
+ * stricter reading.
+ *
+ * **And an offset is refused with them.** This used to take `+02:00`, which was a second disagreement
+ * in the same place and the other way round: `01-kernel.md` 7.1 says the canonical JSON form of an
+ * `instant` is RFC 3339 *UTC*, the TypeScript decoder has always required `Z`, and only Core was
+ * lenient. Nothing in any model or fixture wrote one, which is how it survived — the decoding
+ * equivalence harness compares what the payload files happen to cover, and none of them carried an
+ * offset. There is one now.
+ */
+const leapYear = (year: number): boolean => (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+
+const daysIn = (year: number, month: number): number =>
+  month === 2 ? (leapYear(year) ? 29 : 28) : [31, 0, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+
+const isCivilDate = (year: number, month: number, day: number): boolean =>
+  month >= 1 && month <= 12 && day >= 1 && day <= daysIn(year, month);
+
+/** The shape, then the calendar. */
+function isInstant(value: string): boolean {
+  const m = RFC3339.exec(value);
+  if (m === null) return false;
+  if (!isCivilDate(Number(m[1]), Number(m[2]), Number(m[3]))) return false;
+  return Number(m[4]) <= 23 && Number(m[5]) <= 59 && Number(m[6]) <= 59;
+}
+
+function isDate(value: string): boolean {
+  const m = CIVIL_DATE.exec(value);
+  return m !== null && isCivilDate(Number(m[1]), Number(m[2]), Number(m[3]));
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DURATION = /^(P|\d+(ms|s|m|h|d))/;
 /** `01-kernel.md` section 7: `bytes` travels as base64url, which has no padding and no `+` or `/`. */
@@ -545,13 +592,13 @@ function validateScalar(spec: Spec, value: JsonValue, at: string, out: Problem[]
       return out;
 
     case "instant":
-      if (typeof value !== "string" || !RFC3339.test(value)) {
+      if (typeof value !== "string" || !isInstant(value)) {
         push(`expected an RFC 3339 instant, got ${JSON.stringify(value)}`);
       }
       return out;
 
     case "date":
-      if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      if (typeof value !== "string" || !isDate(value)) {
         push(`expected a date, got ${JSON.stringify(value)}`);
       }
       return out;

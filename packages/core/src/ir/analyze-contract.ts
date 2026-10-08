@@ -12,7 +12,7 @@
  * is a thing nobody means.
  */
 
-import type { Diagnostic } from "../diagnostics.js";
+import type { Diagnostic, Span } from "../diagnostics.js";
 import type { LinkedModel } from "./link.js";
 import type { Operand, Predicate } from "./predicate.js";
 import { coverageOf, overlapOf, showWitness } from "./partition.js";
@@ -43,6 +43,7 @@ export function analyzeContract(model: LinkedModel): Diagnostic[] {
     ...internalScopes(model),
     ...carriedMessages(model),
     ...valueNarrowing(model),
+    ...impossibleConstraints(model),
     ...foreignMutation(model),
   ];
 }
@@ -713,6 +714,87 @@ function valueNarrowing(model: LinkedModel): Diagnostic[] {
       out.push(
         loosens(derived, base, `\`multipleOf ${mineBy}\`, which is not a multiple of its base's ${theirsBy}`),
       );
+    }
+  }
+
+  return out;
+}
+
+/**
+ * A declaration no payload can satisfy.
+ *
+ * `length 5..3` is not a narrow rule, it is an empty one: no string is both at least five characters
+ * and at most three. The same for `range 10..1` and `size 9..2`. A model holding one checks out,
+ * draws and generates — and then rejects every message that reaches the field, for a reason that was
+ * decidable from the model alone before anything ran.
+ *
+ * This is section 2.0 read the other way. That test asks whether a declaration can be enforced; these
+ * are enforced perfectly and can never be met, and the outcome is the same one it warns about — a
+ * model people have learned not to trust. An error rather than a warning, for the reason
+ * `valueNarrowing` is one: the two read identically to a reader and mean opposite things, and a rule
+ * that silently rejects everything is worse than one that silently does nothing.
+ *
+ * **`normalize` is in here because it runs first.** `01-kernel.md` section 3 normalizes on receipt,
+ * before validation, so `normalize upper` beside `pattern /^[a-z]+$/` is a pattern tested against a
+ * string that has just been upper-cased. It is the worst of these to find by hand: it passes a bare
+ * `validate`, which does not normalize, and fails in every running system.
+ *
+ * What is deliberately *not* checked is anything needing two patterns intersected, or a pattern
+ * weighed against a length. That is a decision procedure for regular languages, and these are the
+ * cases a reader would call obvious — which is the line worth drawing, because a checker nobody can
+ * predict is a checker people argue with.
+ */
+function impossibleConstraints(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  const impossible = (span: Span, what: string, detail: string): Diagnostic => ({
+    code: "impossible-constraint",
+    severity: "error",
+    message: `\`${what}\` ${detail}, so nothing can satisfy it`,
+    span,
+  });
+
+  const check = (constraints: readonly ConstraintIr[], what: string, span: Span): void => {
+    for (const axis of ["length", "size", "range"] as const) {
+      // `boundsFor` intersects every clause on the axis, so this catches two clauses that cross as
+      // well as one written backwards: `length 1..10` beside `length 20..30` is the same emptiness.
+      const { min, max } = boundsFor(constraints, axis);
+      if (min !== undefined && max !== undefined && min > max) {
+        out.push(impossible(span, what, `declares a ${axis} of at least ${min} and at most ${max}`));
+      }
+    }
+
+    const normalize = constraints.find((c) => c.name === "normalize");
+    const pattern = constraints.find((c) => c.name === "pattern");
+    if (normalize === undefined || pattern === undefined) return;
+
+    const ops = normalize.args.map((a) => a.replace(/["']/g, "").trim());
+    const source = pattern.args[0] ?? "";
+    // Only the two operations that change case, and only where the pattern requires the case they
+    // remove and permits no other. A class the pattern also allows the other way is satisfiable, and
+    // anything subtler than a character class is left alone rather than guessed at.
+    const removes = ops.includes("upper") ? "a-z" : ops.includes("lower") ? "A-Z" : undefined;
+    const keeps = removes === "a-z" ? "A-Z" : "a-z";
+    if (removes !== undefined && source.includes(removes) && !source.includes(keeps)) {
+      out.push(
+        impossible(
+          span,
+          what,
+          `normalizes to ${removes === "a-z" ? "upper" : "lower"} case and then requires ` +
+            `\`${source}\`, which that normalization has just made unmatchable`,
+        ),
+      );
+    }
+  };
+
+  for (const decl of model.decls) {
+    if (decl.kind === "value") {
+      check(decl.constraints, decl.id.name, decl.span);
+      continue;
+    }
+    if (decl.kind !== "message" && decl.kind !== "record" && decl.kind !== "envelope") continue;
+    for (const field of decl.fields) {
+      check(field.constraints, `${decl.id.name}.${field.name}`, field.span);
     }
   }
 

@@ -151,6 +151,77 @@ describe("validate", () => {
   });
 });
 
+/**
+ * A `date` is a day that happened, and an `instant` is a moment that existed.
+ *
+ * The regexes checked the shape and nothing checked the calendar, so `2026-13-01`, `2026-02-31` and
+ * `2026-01-01T25:00:00Z` were all accepted. `01-kernel.md` calls one a civil date and the other RFC
+ * 3339, and neither of those is a string that merely looks like one.
+ *
+ * What made it more than tidiness is that the implementations disagreed. C# holds an `instant` in a
+ * `DateTimeOffset` and a `date` in a `DateOnly`, and refuses every one of those; Core and the
+ * TypeScript decoder took them. So a scenario could publish a payload the sandbox called valid, the
+ * engine could deliver it, and a C# service could not deserialize it at all — the model saying `date`
+ * while two implementations meant different things by it. The cases below are the ones that were run
+ * against a real `dotnet` to decide what Core should say.
+ */
+describe("a date is a day that happened", () => {
+  const SOURCE = `package t
+message When v1.0 @event {
+  id:   uuid @role(businessKey)
+  day:  date
+  when: instant
+}
+`;
+  const spec = () => {
+    const ws = buildWorkspace([{ path: "t.7k", source: SOURCE }]);
+    expect(ws.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    return { m: ws.model, s: specOfDecl(ws.model, declOf<MessageIr>(ws.model, "When"), [], 0) };
+  };
+  const ID = "00000000-0000-7000-8000-000000000000";
+  const OK = "2026-01-01T00:00:00Z";
+  const judge = (body: Record<string, unknown>): number => {
+    const { m, s } = spec();
+    return validate(m, s, { id: ID, day: "2026-01-01", when: OK, ...body } as never).length;
+  };
+
+  it("refuses a month, a day and an hour that cannot exist", () => {
+    expect(judge({ day: "2026-13-01" }), "month 13").toBeGreaterThan(0);
+    expect(judge({ day: "2026-01-32" }), "day 32").toBeGreaterThan(0);
+    expect(judge({ when: "2026-01-01T25:00:00Z" }), "hour 25").toBeGreaterThan(0);
+    expect(judge({ when: "2026-01-01T00:61:00Z" }), "minute 61").toBeGreaterThan(0);
+  });
+
+  it("knows which Februaries have a twenty-ninth", () => {
+    expect(judge({ day: "2026-02-31" }), "31 February").toBeGreaterThan(0);
+    expect(judge({ day: "2026-02-29" }), "29 February 2026").toBeGreaterThan(0);
+    expect(judge({ day: "2024-02-29" }), "29 February 2024").toBe(0);
+    // The hundred-year rule, both ways round, because the cheap version of this gets 1900 wrong.
+    expect(judge({ day: "1900-02-29" }), "29 February 1900").toBeGreaterThan(0);
+    expect(judge({ day: "2000-02-29" }), "29 February 2000").toBe(0);
+  });
+
+  /** RFC 3339 permits `:60` and .NET refuses it. Agreement is the point, so this follows .NET. */
+  it("refuses a leap second, because the other implementation does", () => {
+    expect(judge({ when: "2026-12-31T23:59:60Z" })).toBeGreaterThan(0);
+  });
+
+  /**
+   * `01-kernel.md` 7.1 makes the canonical form RFC 3339 *UTC*. Core used to take an offset, which
+   * was a disagreement with the TypeScript decoder the other way round — that one has always
+   * required `Z`. No model or fixture anywhere wrote an offset, which is how it went unnoticed.
+   */
+  it("requires UTC, because that is what the canonical form is", () => {
+    expect(judge({ when: "2026-01-01T00:00:00+02:00" }), "an offset").toBeGreaterThan(0);
+    expect(judge({ when: "2026-01-01T00:00:00Z" }), "UTC").toBe(0);
+  });
+
+  it("still takes what the kernel's own example writes", () => {
+    // `01-kernel.md` section 7.1, verbatim.
+    expect(judge({ when: "2026-09-30T14:22:05.123456Z", day: "2026-09-30" })).toBe(0);
+  });
+});
+
 describe("normalizeValue", () => {
   it("applies a declared normalization", () => {
     const m = model();
