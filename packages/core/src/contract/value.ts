@@ -170,7 +170,7 @@ export const constraint = (spec: Spec, name: string): ConstraintIr | undefined =
   // The last wins, which is the narrowing one: an alias's constraints come first.
   [...spec.constraints].reverse().find((c) => c.name === name);
 
-const allOf = (spec: Spec, name: string): ConstraintIr[] =>
+const allOf = (spec: Pick<Spec, "constraints">, name: string): ConstraintIr[] =>
   spec.constraints.filter((c) => c.name === name);
 
 /** Every declared `example`, unquoted. */
@@ -219,11 +219,10 @@ const SAFE = 9007199254740991n;
  * the encoding was not deterministic per field, and the precision the rule protects was lost anyway
  * because a string was converted with `Number()` before its bounds were checked.
  *
- * This answers the question. It does not yet *enforce* the answer, and that is deliberate: requiring
- * the string form is a change to the wire every provider has to make together, and Core alone
- * refusing a number that a C# service wrote from a `long` would be a worse divergence than the
- * rounding it prevents. Exported so that when the providers do make it, all of them ask one question
- * and get one answer rather than each deciding what "can exceed" means.
+ * It is enforced here and honoured by the providers, which had to happen together: Core alone
+ * refusing a number that a C# service wrote from a `long` would have been a worse divergence than the
+ * rounding it prevents. Exported for that reason — the TypeScript provider's guard and the C#
+ * converter both ask this function, so none of the three can disagree about which fields it covers.
  *
  * **An undeclared range is not treated as wide here, and that is a judgement.** `int` is 64-bit, so a
  * field with no `range` really can hold 2^60 and a number really cannot carry it — the strict reading
@@ -238,8 +237,12 @@ const SAFE = 9007199254740991n;
  *
  * Read from the constraint's own text rather than from `range`, because `range` returns `number` and
  * a bound past 2^53 has already lost precision by the time it is one.
+ *
+ * Takes the constraints alone rather than a whole `Spec`, so that a provider walking its own IR can
+ * ask without building one. That is the point of exporting it: four providers deciding separately
+ * what "can exceed" means is four chances to disagree about a wire format.
  */
-export function intIsWide(spec: Spec): boolean {
+export function intIsWide(spec: Pick<Spec, "constraints">): boolean {
   let min: bigint | undefined;
   let max: bigint | undefined;
 
@@ -699,18 +702,24 @@ function validateScalar(spec: Spec, value: JsonValue, at: string, out: Problem[]
       // The string form is checked as an integer and never through a double, which is the whole
       // reason 7.1 offers it: `Number("90071992547409921")` is `...920` before any bound is compared,
       // so the old conversion threw away exactly what the string was carrying.
-      if (typeof value === "string" && /^-?\d+$/.test(value)) {
+      // One form per field, decided by the model (7.1). Both providers now write and read the form
+      // this asks for, so requiring it no longer sets Core against them.
+      if (intIsWide(spec)) {
+        if (typeof value !== "string" || !/^-?\d+$/.test(value)) {
+          push(
+            `expected an int as a string, got ${typeOf(value)} — its range reaches past what a JSON ` +
+              "number holds exactly, so it travels as text",
+          );
+          return out;
+        }
+        // Compared as an integer and never through a double, which is the point of the string form:
+        // `Number("90071992547409921")` is `...920` before any bound is looked at.
         return wideBounds(spec, BigInt(value), push, out);
       }
       if (typeof value !== "number" || !Number.isInteger(value)) {
         push(`expected an int, got ${typeOf(value)}`);
         return out;
       }
-      // Still accepted as a number, even where `intIsWide` says the field needs the string form.
-      // Requiring it is a wire-format change every provider has to make at the same time — Core
-      // refusing a `long` that C# wrote as a number would be a worse divergence than the rounding it
-      // prevents. `intIsWide` is exported so that change can be made once, in one place, by all of
-      // them; until then `int-unbounded` and this comment are what mark the gap.
       return numericBounds(spec, value, push, out);
     }
 
