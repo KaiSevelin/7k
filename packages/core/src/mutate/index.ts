@@ -32,13 +32,25 @@
  * The data operations — `addValue`, `addRecord`, `addField`, `setConstraint` — are local in the same way
  * the connecting ones are, and are simply not written yet.
  *
- * `removeService` and `removePipe` are here and are local in that same way, with one rule between them:
- * **a mutation may cost something and say so, but it does not leave the model not checking out.**
- * Nothing in the language refers to a service by name — a saga's host is derived from its `reacts` —
- * so removing one is a cost to report. A pipe *is* referred to by name, so removing one underneath an
- * `emits` leaves an unresolved reference, and that is refused with the clauses named. Removing those
- * clauses here instead was declined: it turns one local edit into an edit across every service that
- * touched the pipe, which is a larger promise than anything else in this module makes.
+ * `removeDecl` removes any declaration, and `removeService` and `removePipe` are the two wrappers that
+ * name a kind. The rule here used to be **a mutation may cost something and say so, but it does not
+ * leave the model not checking out**, and the second half of that was wrong — it was stricter than the
+ * language. D20 requires a half-drawn model to parse, and `20-ir.md` section 5 describes the state a
+ * removal leaves as one of the ordinary ones: *"a service with no pipes, an edge dragged into empty
+ * space"*, where an unresolved reference is reported once at its own span and every dependent check
+ * returns unknown rather than cascading. Editing is a process and a process has intermediate states;
+ * refusing until everything pointing at a thing had been taken apart first was enforcing an order of
+ * work nothing in the language asks for, and it made a connected pipe undeletable from an editor.
+ *
+ * So the rule is now **a mutation always says what it costs, and does not refuse a cost the language
+ * itself tolerates.** What stays refused is what cannot be written at all: a declaration that is not
+ * there, a file that was never parsed, a name already taken. Those are facts about the operation
+ * rather than costs of it.
+ *
+ * Nothing rewrites a reference into a hole. `emits Work to inbound` is left exactly as written when
+ * `inbound` goes: the name is the record of what was meant, it is what lets the pipe be put back or
+ * another renamed into its place, and it is what the warning points at. What becomes unknown is the
+ * resolution, which is the language's own answer and needs nothing written down.
  *
  * ### Scenarios, which are not part of the language and are edited here anyway
  *
@@ -75,6 +87,7 @@ export {
   carriersOf,
   emittersOf,
   moveToPackage,
+  removeDecl,
   removePipe,
   removeService,
   setDeadline,

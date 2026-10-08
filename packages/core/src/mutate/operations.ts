@@ -1645,165 +1645,242 @@ function spanOfWhole(source: string, decl: Decl): { start: number; end: number }
 }
 
 /** Every scenario step that names this service, as `file: scenario`. */
-function scenariosNaming(editable: Editable, service: ServiceIr): string[] {
+function scenariosNaming(editable: Editable, decl: Decl): string[] {
+  const key = symbolKey(decl.id.pkg, decl.id.name);
   const out: string[] = [];
   for (const tree of scenarioTreesOf(editable)) {
-    for (const decl of childNodes(tree.root)) {
-      if (decl.kind !== "ScenarioDecl" && decl.kind !== "SoakDecl") continue;
-      const name = declaredName(decl, "scenario", "soak");
-      const body = childNodes(decl, "Body")[0];
+    for (const node of childNodes(tree.root)) {
+      if (node.kind !== "ScenarioDecl" && node.kind !== "SoakDecl") continue;
+      const name = declaredName(node, "scenario", "soak");
+      const body = childNodes(node, "Body")[0];
       if (name === undefined || body === undefined) continue;
-      // `publish M as S` and `expect S handled M` are the two forms that name one.
-      const names = [...descendants(body)]
-        .filter((n) => n.kind === "PublishStmt" || n.kind === "ExpectStmt")
-        .flatMap((n) => childNodes(n, "QName").map(flatText));
-      if (names.some((n) => n === service.id.name || n === qualify(service.id))) {
+      // Every qualified name in the body, resolved the way the scenario checker resolves them. A
+      // scenario names a message, a pipe, a service and a saga in a handful of different clauses, and
+      // asking `lookup` what each one means is one rule rather than a list of statement kinds to keep
+      // in step with the grammar.
+      for (const qname of descendants(body)) {
+        if (qname.kind !== "QName") continue;
+        const text = flatText(qname);
+        // `commands.dead` is derived and never declared (D45), so it resolves against its own pipe.
+        const base = text.endsWith(".dead") ? text.slice(0, -5) : text;
+        const found = editable.model.lookup(tree.pkg, base);
+        if (found === undefined || symbolKey(found.id.pkg, found.id.name) !== key) continue;
         out.push(`${tree.file}: ${name}`);
+        break;
       }
     }
   }
   return [...new Set(out)];
 }
 
+
+// ---- removing ---------------------------------------------------------------
+
 /**
- * `service X { ... }`, removed.
+ * Everywhere one declaration is named, in the model and in the scenarios beside it.
  *
- * **Nothing in the language refers to a service by name**, which is what makes this the one declaration
- * that can be removed without first taking something apart. A saga's host is *derived* — it is the
- * service that reacts to the saga's start message (`04-process.md`) — so removing it leaves the saga
- * without one rather than leaving a dangling reference, and that is said as a warning rather than
- * refused: the model stays readable and the checker names it.
+ * The linker's own `referenceSites`, so what counts as a reference is "a `Ref` the linker would
+ * resolve" rather than every name in the text — the same list `rename` rewrites, read here to be
+ * reported instead. Two passes asking one question, which is what keeps them from disagreeing about
+ * what a reference is.
  *
- * **A scenario naming it is a warning too, and deliberately not a refusal.** `publish M as S` does name
- * a service, so a scenario referring to this one stops resolving — but a scenario file is a sibling
- * artifact with its own file and its own fix (`30-scenarios.md`), and refusing here would make a
- * service undeletable because something that is not the model mentions it. Named, so the fix is
- * findable.
+ * Scenarios are not in it, because they are not model IR (D62). `scenariosNaming` covers them, and it
+ * answers in their own currency: which scenario in which file, rather than a span.
  */
-export function removeService(editable: Editable, what: { readonly service: string }): Mutation {
-  const op = "removeService";
-  const describe = `remove service ${what.service}`;
+interface Mention {
+  readonly file: string;
+  readonly span: Span;
+  /** What is named, as written. */
+  readonly text: string;
+  /** What names it, for a message a reader can act on: "`Desk` emits to it". */
+  readonly by: string;
+}
+
+function mentionsOf(editable: Editable, decl: Decl): Mention[] {
+  const { model } = editable;
+  const key = symbolKey(decl.id.pkg, decl.id.name);
+  const out: Mention[] = [];
+
+  // Which declaration a reference sits inside, so a mention can say who is doing the mentioning. The
+  // span is the only thing relating the two, and a reference is always inside exactly one.
+  const holding = (span: Span): Decl | undefined =>
+    model.decls.find(
+      (d) => d.file === span.file && d.span.start <= span.start && d.span.end >= span.end,
+    );
+
+  for (const site of referenceSites(model)) {
+    const id = model.resolve(site.ref);
+    if (id === undefined || symbolKey(id.pkg, id.name) !== key) continue;
+    const inside = holding(site.ref.span);
+    out.push({
+      file: site.ref.span.file,
+      span: site.ref.span,
+      text: site.ref.text,
+      by: inside === undefined ? site.expect : `\`${inside.id.name}\``,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Any declaration, removed, and everything that named it said out loud.
+ *
+ * **This does not refuse because the model will stop checking out.** That was the rule the rest of
+ * this module follows and it is the wrong rule here, because it is stricter than the language. `D20`
+ * requires a half-drawn model to parse, and `20-ir.md` section 5 is explicit about the state that
+ * leaves: *"a service with no pipes, an edge dragged into empty space"* — an unresolved reference is
+ * reported once at its own span and every dependent check returns unknown, rather than cascading.
+ * Editing is a process, and a process has intermediate states. A tool that would not let you delete
+ * something until you had first taken apart everything pointing at it would be enforcing an order of
+ * work that nothing in the language asks for.
+ *
+ * **So the reference text is left exactly as written.** Nothing rewrites `emits Work to inbound` into
+ * a hole: the name is the record of what you meant, it is what lets you put the pipe back or rename
+ * another into its place, and it is what the warning below can point at. What becomes unknown is the
+ * *resolution*, which is the language's own answer and needs nothing written down.
+ *
+ * What is still refused is what cannot be written at all: a declaration that is not there, and a file
+ * that was never parsed. Those are facts about the operation rather than costs of it.
+ */
+export function removeDecl(
+  editable: Editable,
+  what: { readonly name: string; readonly kind?: Decl["kind"] },
+): Mutation {
+  const op = "removeDecl";
+  const describe = `remove ${what.name}`;
   const { model } = editable;
 
-  const service = findDecl(model, what.service, "service");
-  if (service === undefined || service.kind !== "service") {
+  const decl = model.decls.find(
+    (d) => (what.kind === undefined || d.kind === what.kind) && matches(d, what.name),
+  );
+  if (decl === undefined) {
     return refuse(op, describe, [
-      error("no-such-service", `no service \`${what.service}\``, nowhere("")),
+      // `no-such-service` where a kind was asked for, because that is the code a caller with a
+      // service in hand is already handling and the generic one would be a quieter answer.
+      error(
+        what.kind === undefined ? "no-such-declaration" : `no-such-${what.kind}`,
+        what.kind === undefined
+          ? `no declaration \`${what.name}\``
+          : `no ${what.kind} \`${what.name}\``,
+        nowhere(""),
+      ),
     ]);
   }
 
-  const source = editable.sources[service.file];
+  const source = editable.sources[decl.file];
   if (source === undefined) {
     return refuse(op, describe, [
-      error("no-file", `\`${service.file}\` was not parsed, so it cannot be edited`, service.span),
+      error("no-file", `\`${decl.file}\` was not parsed, so it cannot be edited`, decl.span),
     ]);
   }
 
-  const diagnostics: Diagnostic[] = [];
+  const diagnostics: Diagnostic[] = [...consequencesOf(editable, decl)];
 
-  const hosted = model.decls.filter(
-    (d) =>
-      d.kind === "saga" &&
-      d.id.pkg === service.id.pkg &&
-      d.start !== undefined &&
-      service.reacts.some((r) => {
-        const a = model.resolve(r.message);
-        const b = d.start === undefined ? undefined : model.resolve(d.start.message);
-        return a !== undefined && b !== undefined && symbolKey(a.pkg, a.name) === symbolKey(b.pkg, b.name);
-      }),
-  );
-  for (const saga of hosted) {
+  // One warning per place, naming the file and what holds it, because the fix is to go there.
+  // Grouped by what does the naming rather than listed one line per reference: a message carried by
+  // one pipe and reacted to by four services is five references and two things to go and look at.
+  const mentions = mentionsOf(editable, decl);
+  if (mentions.length > 0) {
+    const by = [...new Set(mentions.map((m) => m.by))];
     diagnostics.push(
       warn(
-        "saga-loses-host",
-        `\`${saga.id.name}\` is hosted by \`${service.id.name}\` because it reacts to that saga's ` +
-          "start message, so removing it leaves the saga with nothing to run it",
-        saga.span,
+        "left-unresolved",
+        `${by.join(", ")} still ${by.length === 1 ? "names" : "name"} \`${decl.id.name}\`, and will ` +
+          "stop resolving — the text is left as written, so putting it back or renaming another " +
+          `\`${decl.kind}\` into its place is enough to fix ${mentions.length === 1 ? "it" : "them"}`,
+        decl.span,
       ),
     );
   }
 
-  const named = scenariosNaming(editable, service);
+  // Said separately because it is a different file and a different fix. A scenario is a sibling
+  // artifact with its own suite (`30-scenarios.md`), so a model edit that broke one silently would
+  // break the thing that proves the model means anything.
+  const named = scenariosNaming(editable, decl);
   if (named.length > 0) {
     diagnostics.push(
       warn(
         "named-by-scenario",
-        `\`${service.id.name}\` is named by ${named.map((n) => `\`${n}\``).join(", ")}, which will ` +
+        `\`${decl.id.name}\` is named by ${named.map((n) => `\`${n}\``).join(", ")}, which will ` +
           "stop resolving",
-        service.span,
+        decl.span,
       ),
     );
   }
 
-  const { start, end } = spanOfWhole(source, service);
+  const { start, end } = spanOfWhole(source, decl);
   return {
     op,
-    describe: `remove service ${service.id.name} from ${service.id.pkg}`,
-    edits: [{ file: service.file, start, end, text: "" }],
+    describe: `remove ${decl.kind} ${decl.id.name} from ${decl.id.pkg}`,
+    edits: [{ file: decl.file, start, end, text: "" }],
     diagnostics,
   };
 }
 
 /**
+ * What else a removal costs, where the kind has a cost of its own.
+ *
+ * Only two do, and both are about something *derived* rather than referenced — which is why neither
+ * shows up in `mentionsOf`: nothing in the text names them, so nothing stops resolving, and without
+ * this they would go silently.
+ */
+function consequencesOf(editable: Editable, decl: Decl): Diagnostic[] {
+  const { model } = editable;
+  if (decl.kind !== "service") return [];
+
+  // A saga's host is the service that reacts to its start message (`04-process.md`), so it is derived
+  // and not named — removing the service leaves the saga with nothing to run it and no dangling
+  // reference to notice.
+  const out: Diagnostic[] = [];
+  for (const saga of model.decls) {
+    if (saga.kind !== "saga" || saga.id.pkg !== decl.id.pkg || saga.start === undefined) continue;
+    const started = model.resolve(saga.start.message);
+    if (started === undefined) continue;
+    const hosts = decl.reacts.some((r) => {
+      const to = model.resolve(r.message);
+      return to !== undefined && symbolKey(to.pkg, to.name) === symbolKey(started.pkg, started.name);
+    });
+    if (!hosts) continue;
+    out.push(
+      warn(
+        "saga-loses-host",
+        `\`${saga.id.name}\` is hosted by \`${decl.id.name}\` because it reacts to that saga's start ` +
+          "message, so removing it leaves the saga with nothing to run it",
+        saga.span,
+      ),
+    );
+  }
+  return out;
+}
+
+/**
+ * `service X { ... }`, removed.
+ *
+ * A wrapper on `removeDecl`, kept because it is what a caller with a service in hand asks for and
+ * because the kind is then checked rather than guessed from a name that two kinds could share.
+ */
+export function removeService(editable: Editable, what: { readonly service: string }): Mutation {
+  return removeDecl(editable, { name: what.service, kind: "service" });
+}
+
+/**
  * `pipe x : queue { ... }`, removed.
  *
- * **Refused while anything still emits to it or reacts from it**, with the clauses named. A pipe *is*
- * referred to by name, so removing one underneath an `emits` leaves an unresolved reference — an error,
- * in the model's own files, which is the line this module draws: a mutation may cost something and say
- * so, but it does not leave the model not checking out. The fix is a disconnect, which is one drag or
- * one menu row away, and saying which clauses is what makes that fix findable.
+ * **It no longer refuses while something still emits to it.** It did, on the grounds that removing a
+ * pipe underneath an `emits` leaves an unresolved reference — true, and not a reason to refuse. The
+ * language is explicit that a half-drawn model must parse (D20) and that an unresolved reference is
+ * reported once at its own span with every dependent check returning unknown (`20-ir.md` section 5),
+ * so the state this leaves is one the language describes rather than one it forbids. Refusing meant a
+ * pipe wired to anything could not be deleted at all from an editor, and the message said the fix was
+ * "one drag or one menu row away" — which was advice to go and do something by hand first, in a tool
+ * whose whole point is that you do not have to.
  *
- * Removing the clauses here instead was the alternative and was declined: it turns one local edit into
- * an edit across every service that touched the pipe, which is a different and much larger promise than
- * the rest of this module makes. `20-ir.md` keeps that class of thing — `moveToPackage` — separate for
- * the same reason.
+ * What was right about the old rule was that the cost must be *said*. It still is, by name and by
+ * place: see `removeDecl`.
  */
 export function removePipe(editable: Editable, what: { readonly pipe: string }): Mutation {
-  const op = "removePipe";
-  const describe = `remove pipe ${what.pipe}`;
-  const { model } = editable;
-
-  const pipe = findDecl(model, what.pipe, "pipe");
-  if (pipe === undefined || pipe.kind !== "pipe") {
-    return refuse(op, describe, [error("no-such-pipe", `no pipe \`${what.pipe}\``, nowhere(""))]);
-  }
-
-  const source = editable.sources[pipe.file];
-  if (source === undefined) {
-    return refuse(op, describe, [
-      error("no-file", `\`${pipe.file}\` was not parsed, so it cannot be edited`, pipe.span),
-    ]);
-  }
-
-  const key = symbolKey(pipe.id.pkg, pipe.id.name);
-  const uses: string[] = [];
-  for (const decl of model.decls) {
-    if (decl.kind !== "service") continue;
-    const on = (ref: Ref): boolean => {
-      const id = model.resolve(ref);
-      return id !== undefined && symbolKey(id.pkg, id.name) === key;
-    };
-    for (const emit of decl.emits) if (on(emit.pipe)) uses.push(`\`${decl.id.name}\` emits to it`);
-    for (const react of decl.reacts) if (on(react.pipe)) uses.push(`\`${decl.id.name}\` reacts from it`);
-  }
-
-  if (uses.length > 0) {
-    return refuse(op, describe, [
-      error(
-        "pipe-in-use",
-        `${[...new Set(uses)].join(", ")} — disconnect those first, or the reference is left dangling`,
-        pipe.span,
-      ),
-    ]);
-  }
-
-  const { start, end } = spanOfWhole(source, pipe);
-  return {
-    op,
-    describe: `remove pipe ${pipe.id.name} from ${pipe.id.pkg}`,
-    edits: [{ file: pipe.file, start, end, text: "" }],
-    diagnostics: [],
-  };
+  return removeDecl(editable, { name: what.pipe, kind: "pipe" });
 }
 
 // ---- scenarios --------------------------------------------------------------

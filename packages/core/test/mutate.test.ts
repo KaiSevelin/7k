@@ -38,6 +38,7 @@ import {
   isPossible,
   moveToPackage,
   removePipe,
+  removeDecl,
   removeService,
   rename,
   referenceTo,
@@ -1345,6 +1346,85 @@ describe("removing declarations", () => {
     });
   });
 
+  /**
+   * Every other kind, which had no removal at all.
+   *
+   * There is one operation behind all of them, because the text removal is identical — `spanOfWhole`,
+   * comment and all — and only the report differs. A message was the conspicuous gap: you could add
+   * one from Spider's composer and never take it back.
+   */
+  describe("anything else", () => {
+    it("removes a message, and says what was carrying it", () => {
+      const mutation = removeDecl(where(), { name: "Place" });
+      expect(mutation.describe).toBe("remove message Place from shop");
+      const said = mutation.diagnostics.find((d) => d.code === "left-unresolved");
+      expect(said?.message).toContain("Desk");
+
+      const after = check({ "a.7k": REMOVABLE }, mutation)["a.7k"]!;
+      expect(after).not.toContain("message Place");
+      // Still a model, with one error at the reference that is now pointing at nothing.
+      const ws = buildWorkspace([{ path: "a.7k", source: after }]);
+      expect(ws.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)).toEqual([
+        "unresolved-reference",
+      ]);
+    });
+
+    it("names the kind it found when none was asked for", () => {
+      expect(removeDecl(where(), { name: "Desk" }).describe).toBe("remove service Desk from shop");
+      expect(removeDecl(where(), { name: "quiet" }).describe).toBe("remove pipe quiet from shop");
+    });
+
+    it("refuses a kind that does not match the name", () => {
+      const mutation = removeDecl(where(), { name: "Place", kind: "pipe" });
+      expect(mutation.edits).toEqual([]);
+      expect(mutation.diagnostics[0]?.code).toBe("no-such-pipe");
+    });
+
+    it("removes a value, a record and an enum, each leaving the fields that used it unresolved", () => {
+      const source = `package shop
+
+enum Status { Open Shut }
+
+value Sku : string { length 1..24 }
+
+record Line {
+  sku: Sku
+}
+
+message Place v1.0 @command {
+  orderId: uuid @role(businessKey)
+  lines:   [Line]
+  status:  Status
+}
+`;
+      for (const [name, kind] of [
+        ["Sku", "value"],
+        ["Line", "record"],
+        ["Status", "enum"],
+      ] as const) {
+        const mutation = removeDecl(editable({ "a.7k": source }), { name });
+        expect(mutation.describe, name).toBe(`remove ${kind} ${name} from shop`);
+        expect(mutation.edits.length, name).toBe(1);
+        const after = check({ "a.7k": source }, mutation)["a.7k"]!;
+        expect(after, name).not.toContain(`${kind} ${name}`);
+        const ws = buildWorkspace([{ path: "a.7k", source: after }]);
+        // One error per reference, and nothing cascading off it.
+        const codes = ws.diagnostics.filter((d) => d.severity === "error").map((d) => d.code);
+        expect(new Set(codes), name).toEqual(new Set(["unresolved-reference"]));
+      }
+    });
+
+    it("removes a saga, which nothing names, so nothing is left dangling", () => {
+      const mutation = removeDecl(editable({ "a.7k": SAGA_MODEL }), { name: "Checkout" });
+      expect(mutation.describe).toContain("remove saga Checkout");
+      expect(mutation.diagnostics.filter((d) => d.code === "left-unresolved")).toEqual([]);
+      const after = check({ "a.7k": SAGA_MODEL }, mutation)["a.7k"]!;
+      expect(buildWorkspace([{ path: "a.7k", source: after }]).diagnostics.filter(
+        (d) => d.severity === "error",
+      )).toEqual([]);
+    });
+  });
+
   describe("a pipe", () => {
     it("removes one nothing touches", () => {
       const after = applied(removePipe(where(), { pipe: "quiet" }));
@@ -1353,16 +1433,59 @@ describe("removing declarations", () => {
       expect(errorsIn(after)).toEqual([]);
     });
 
-    it("refuses one still in use, and names the clauses", () => {
+    /**
+     * It used to refuse this, and the refusal was stricter than the language.
+     *
+     * D20 requires a half-drawn model to parse, and `20-ir.md` section 5 names the state this leaves
+     * as one of the ordinary ones — *"an edge dragged into empty space"* — where the unresolved
+     * reference is reported once at its own span and dependent checks return unknown. Refusing made a
+     * pipe wired to anything undeletable from an editor, and told you the fix was to go and take the
+     * clauses apart by hand first, which is an order of work nothing in the language asks for.
+     */
+    it("removes one that is still in use, and says what stops resolving", () => {
       const mutation = removePipe(where(), { pipe: "inbound" });
-      expect(mutation.edits).toEqual([]);
-      expect(mutation.diagnostics[0]?.code).toBe("pipe-in-use");
-      expect(mutation.diagnostics[0]?.message).toContain("Desk");
-      expect(mutation.diagnostics[0]?.message).toContain("reacts from it");
+      expect(mutation.edits.length).toBe(1);
+
+      const said = mutation.diagnostics.find((d) => d.code === "left-unresolved");
+      expect(said?.severity).toBe("warning");
+      expect(said?.message).toContain("Desk");
+      // The fix, in the message, because the text is left as written on purpose.
+      expect(said?.message).toContain("renaming another");
     });
 
-    it("removes one once the clause that used it has gone", () => {
-      // The two compose, which is what makes refusing an answer rather than a dead end.
+    /**
+     * And what it leaves is exactly what the language describes: one error, at the reference's own
+     * span, with nothing cascading off it. This is the claim that makes removing it safe to offer.
+     */
+    it("leaves one unresolved reference per clause and no cascade", () => {
+      const after = applied(removePipe(where(), { pipe: "inbound" }));
+      const ws = buildWorkspace([{ path: "a.7k", source: after }]);
+      const errors = ws.diagnostics.filter((d) => d.severity === "error");
+      expect(errors.map((d) => d.code)).toEqual(["unresolved-reference"]);
+      // Still a model: the service that named the pipe is still there to be edited.
+      expect(ws.model.decls.some((d) => d.kind === "service" && d.id.name === "Desk")).toBe(true);
+    });
+
+    it("takes its dead letter with it, which a scenario may be naming", () => {
+      // `inbound.dead` is derived and never declared (D45), so nothing in `referenceSites` sees it —
+      // but a scenario can write `expect M on inbound.dead`, and that stops resolving too.
+      const scenarios = `scenarios for shop
+
+scenario Baseline {
+  seed 1
+  expect no message on inbound.dead
+}
+`;
+      const mutation = removeDecl(
+        editable({ "a.7k": REMOVABLE, "s.scenario.7k": scenarios }),
+        { name: "inbound", kind: "pipe" },
+      );
+      const said = mutation.diagnostics.find((d) => d.code === "named-by-scenario");
+      expect(said?.message).toContain("Baseline");
+    });
+
+    it("removes one once the clause that used it has gone, with nothing left to say", () => {
+      // The two still compose, and now the order is the editor's choice rather than the API's.
       const files = { "a.7k": REMOVABLE };
       const first = disconnectReact(where(), {
         service: "Desk",
@@ -1372,6 +1495,7 @@ describe("removing declarations", () => {
       const between = applyAll(files, first.edits);
       const second = removePipe(where(between["a.7k"]!), { pipe: "inbound" });
       expect(second.edits.length).toBe(1);
+      expect(second.diagnostics.filter((d) => d.code === "left-unresolved")).toEqual([]);
       expect(applyAll(between, second.edits)["a.7k"]).not.toContain("pipe inbound");
     });
   });
