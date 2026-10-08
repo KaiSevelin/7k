@@ -203,6 +203,64 @@ export function range(spec: Spec): Bounds {
   return { ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}) };
 }
 
+/** The largest integer a JSON number carries exactly, and the smallest. */
+const SAFE = 9007199254740991n;
+
+/**
+ * Whether this `int` travels as a string.
+ *
+ * `01-kernel.md` 7.1: *"`int` — number, **or** string when the declared `range` can exceed
+ * ±(2^53 − 1); decidable statically from the model, so the encoding is deterministic per field."*
+ * The rule exists because an `int` is a signed 64-bit integer (section 1) and a JSON number is a
+ * double, so the two do not fit: `90071992547409921` parses back as `...920`, silently, before any
+ * validator sees it.
+ *
+ * Nothing implemented it, in Core or in any provider: every one took either form for any `int`, so
+ * the encoding was not deterministic per field, and the precision the rule protects was lost anyway
+ * because a string was converted with `Number()` before its bounds were checked.
+ *
+ * This answers the question. It does not yet *enforce* the answer, and that is deliberate: requiring
+ * the string form is a change to the wire every provider has to make together, and Core alone
+ * refusing a number that a C# service wrote from a `long` would be a worse divergence than the
+ * rounding it prevents. Exported so that when the providers do make it, all of them ask one question
+ * and get one answer rather than each deciding what "can exceed" means.
+ *
+ * **An undeclared range is not treated as wide here, and that is a judgement.** `int` is 64-bit, so a
+ * field with no `range` really can hold 2^60 and a number really cannot carry it — the strict reading
+ * says every bare `int` should be a string. But the rule's own words are "the *declared* range", and
+ * taking the strict reading would change the wire form of every unbounded `int` in every provider,
+ * which is a large price for a field whose author has not yet said what they mean.
+ *
+ * So the gap is made visible rather than decided: `intUnbounded` reports an `int` with no `range` as
+ * a warning naming the fix, which is to say what it holds. That follows what this project does
+ * elsewhere — name the cost, name the fix, do not quietly pick a side — and it leaves the strict
+ * reading available later as a decision somebody takes on purpose.
+ *
+ * Read from the constraint's own text rather than from `range`, because `range` returns `number` and
+ * a bound past 2^53 has already lost precision by the time it is one.
+ */
+export function intIsWide(spec: Spec): boolean {
+  let min: bigint | undefined;
+  let max: bigint | undefined;
+
+  for (const c of allOf(spec, "range")) {
+    const args = c.args.map((a) => a.trim());
+    const at = args.indexOf("..");
+    const whole = (text: string | undefined): bigint | undefined =>
+      text !== undefined && /^-?\d+$/.test(text) ? BigInt(text) : undefined;
+
+    // `range 5` is the degenerate window, both ends at once.
+    const low = at < 0 ? whole(args[0]) : whole(args[at - 1]);
+    const high = at < 0 ? whole(args[0]) : whole(args[at + 1]);
+    if (low !== undefined && (min === undefined || low > min)) min = low;
+    if (high !== undefined && (max === undefined || high < max)) max = high;
+  }
+
+  // A bound that was declared and sits outside what a number holds. An absent bound is the warning's
+  // business, not this function's.
+  return (min !== undefined && min < -SAFE) || (max !== undefined && max > SAFE);
+}
+
 // ---- normalization ----------------------------------------------------------
 
 /**
@@ -637,13 +695,24 @@ function validateScalar(spec: Spec, value: JsonValue, at: string, out: Problem[]
       return numericBounds(spec, Number(value), push, out);
     }
 
-    case "int":
-      if (typeof value === "string" && /^-?\d+$/.test(value)) return numericBounds(spec, Number(value), push, out);
+    case "int": {
+      // The string form is checked as an integer and never through a double, which is the whole
+      // reason 7.1 offers it: `Number("90071992547409921")` is `...920` before any bound is compared,
+      // so the old conversion threw away exactly what the string was carrying.
+      if (typeof value === "string" && /^-?\d+$/.test(value)) {
+        return wideBounds(spec, BigInt(value), push, out);
+      }
       if (typeof value !== "number" || !Number.isInteger(value)) {
         push(`expected an int, got ${typeOf(value)}`);
         return out;
       }
+      // Still accepted as a number, even where `intIsWide` says the field needs the string form.
+      // Requiring it is a wire-format change every provider has to make at the same time — Core
+      // refusing a `long` that C# wrote as a number would be a worse divergence than the rounding it
+      // prevents. `intIsWide` is exported so that change can be made once, in one place, by all of
+      // them; until then `int-unbounded` and this comment are what mark the gap.
       return numericBounds(spec, value, push, out);
+    }
 
     case "float":
       if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -664,6 +733,31 @@ function numericBounds(spec: Spec, n: number, push: (m: string) => void, out: Pr
   const multiple = constraint(spec, "multipleof");
   const by = multiple === undefined ? undefined : Number(multiple.args[0]);
   if (by !== undefined && Number.isFinite(by) && by !== 0 && n % by !== 0) {
+    push(`${n} is not a multiple of ${by}`);
+  }
+  return out;
+}
+
+/**
+ * The same bounds, for a value that never becomes a double.
+ *
+ * `numericBounds` takes a `number`, and converting a wide int to one is the loss this encoding exists
+ * to avoid — a check that rounds its input before comparing it is not a check.
+ */
+function wideBounds(spec: Spec, n: bigint, push: (m: string) => void, out: Problem[]): Problem[] {
+  for (const c of allOf(spec, "range")) {
+    const args = c.args.map((a) => a.trim());
+    const at = args.indexOf("..");
+    const whole = (text: string | undefined): bigint | undefined =>
+      text !== undefined && /^-?\d+$/.test(text) ? BigInt(text) : undefined;
+    const min = at < 0 ? whole(args[0]) : whole(args[at - 1]);
+    const max = at < 0 ? whole(args[0]) : whole(args[at + 1]);
+    if (min !== undefined && n < min) push(`${n} is below the declared minimum ${min}`);
+    if (max !== undefined && n > max) push(`${n} exceeds the declared maximum ${max}`);
+  }
+  const multiple = constraint(spec, "multipleof");
+  const by = multiple === undefined ? undefined : multiple.args[0]?.trim();
+  if (by !== undefined && /^-?\d+$/.test(by) && BigInt(by) !== 0n && n % BigInt(by) !== 0n) {
     push(`${n} is not a multiple of ${by}`);
   }
   return out;

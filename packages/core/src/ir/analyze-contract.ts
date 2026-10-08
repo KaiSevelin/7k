@@ -44,6 +44,7 @@ export function analyzeContract(model: LinkedModel): Diagnostic[] {
     ...carriedMessages(model),
     ...valueNarrowing(model),
     ...impossibleConstraints(model),
+    ...intUnbounded(model),
     ...foreignMutation(model),
   ];
 }
@@ -795,6 +796,55 @@ function impossibleConstraints(model: LinkedModel): Diagnostic[] {
     if (decl.kind !== "message" && decl.kind !== "record" && decl.kind !== "envelope") continue;
     for (const field of decl.fields) {
       check(field.constraints, `${decl.id.name}.${field.name}`, field.span);
+    }
+  }
+
+  return out;
+}
+
+/**
+ * An `int` with no `range`, which has not said what it holds.
+ *
+ * `int` is a signed 64-bit integer (`01-kernel.md` section 1) and the canonical JSON encoding carries
+ * one as a number unless its declared range needs otherwise (7.1). A number is a double, so anything
+ * past 2^53 − 1 comes back changed — `90071992547409921` parses as `...920`, silently, before any
+ * validator sees it.
+ *
+ * A field with no `range` is the case where nobody has decided. It is almost always a count or an
+ * identifier that stays small, and demanding the string form for all of them would change the wire
+ * form of most `int` fields in every provider for a risk their authors have usually already ruled out
+ * in their heads. So this asks them to write it down instead.
+ *
+ * A warning rather than an error, because a model that has not said is still a model — and because
+ * the cost is only real past a threshold most fields never approach. `04-process.md`'s own rule
+ * applies: a warning nobody can act on is worse than none, and this one names exactly what to type.
+ */
+function intUnbounded(model: LinkedModel): Diagnostic[] {
+  const out: Diagnostic[] = [];
+
+  const look = (type: TypeIr, constraints: readonly ConstraintIr[], what: string, span: Span): void => {
+    // The field's own type only. A `value` that refines `int` is checked where it is declared, and
+    // reporting it again at every use would be the same fact several times.
+    if (type.t !== "kernel" || type.name !== "int") return;
+    if (constraints.some((c) => c.name === "range")) return;
+    out.push({
+      code: "int-unbounded",
+      severity: "warning",
+      message:
+        `\`${what}\` is an \`int\` with no \`range\`, so it may hold values beyond ±(2^53 − 1), which ` +
+        "a JSON number does not carry exactly — a `range` says what it holds and settles the encoding",
+      span,
+    });
+  };
+
+  for (const decl of model.decls) {
+    if (decl.kind === "value") {
+      look(decl.base, decl.constraints, decl.id.name, decl.span);
+      continue;
+    }
+    if (decl.kind !== "message" && decl.kind !== "record" && decl.kind !== "envelope") continue;
+    for (const field of decl.fields) {
+      look(field.type, field.constraints, `${decl.id.name}.${field.name}`, field.span);
     }
   }
 

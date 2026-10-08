@@ -130,6 +130,10 @@ describe("the example workspace", () => {
       // KioskBridge pins `accepts TicketIssued v1.0`, so it must deploy before
       // TicketService bumps. True today, a constraint on the next release.
       "deploy-order examples/sales.7k",
+      // `SeatLedgerAdjusted.delta` is an `int` with no `range`, so nothing in the model says whether
+      // it stays inside what a JSON number carries exactly. A ledger delta almost certainly does; the
+      // point of the warning is that the model has not said so, and saying so is one clause.
+      "int-unbounded examples/ticketing.7k",
       // Deliberately package-private, and documented in the file as an orphan.
       "orphan-message examples/ticketing.7k",
       // OrderService sends ticketing's two commands and nothing in the model says

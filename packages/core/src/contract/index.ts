@@ -18,6 +18,7 @@ export {
   normalizeValue,
   specOf,
   specOfDecl,
+  intIsWide,
   range,
   validate,
   windowOf,

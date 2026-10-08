@@ -11,6 +11,7 @@ import {
   buildWorkspace,
   evaluate,
   fieldSpec,
+  intIsWide,
   normalizeValue,
   readPath,
   specOfDecl,
@@ -19,6 +20,7 @@ import {
   type MessageIr,
   type Predicate,
   type RecordIr,
+  type Spec,
 } from "../src/index.js";
 
 const MODEL = `
@@ -219,6 +221,63 @@ message When v1.0 @event {
   it("still takes what the kernel's own example writes", () => {
     // `01-kernel.md` section 7.1, verbatim.
     expect(judge({ when: "2026-09-30T14:22:05.123456Z", day: "2026-09-30" })).toBe(0);
+  });
+});
+
+/**
+ * Which form an `int` travels in, which `01-kernel.md` 7.1 says is decidable from the model.
+ *
+ * It is the answer, and not yet the enforcement. Requiring the string form is a change to the wire
+ * that every provider has to make at the same time — Core alone refusing a number that a C# service
+ * wrote from a `long` would be a worse divergence than the rounding it prevents. What is landed is
+ * that there is now one place to ask, so that when they do make it they all get one answer rather
+ * than each deciding what "can exceed" means.
+ */
+describe("the form an int travels in", () => {
+  const spec = (args: string[] | undefined): Spec => ({
+    shape: "scalar",
+    kernel: "int",
+    constraints:
+      args === undefined ? [] : [{ name: "range", args, span: { file: "", start: 0, end: 0 } }],
+  });
+
+  it("is a string where a declared bound leaves what a number holds exactly", () => {
+    expect(intIsWide(spec(["0", "..", "90071992547409920"]))).toBe(true);
+    expect(intIsWide(spec(["-90071992547409920", "..", "0"]))).toBe(true);
+  });
+
+  it("is a number where the declared bounds stay inside it", () => {
+    expect(intIsWide(spec(["0", "..", "100"]))).toBe(false);
+    // 2^53 − 1 exactly, which is the last one a number carries.
+    expect(intIsWide(spec(["0", "..", "9007199254740991"]))).toBe(false);
+    expect(intIsWide(spec(["0", "..", "9007199254740992"]))).toBe(true);
+  });
+
+  /**
+   * An undeclared range is the case nobody has decided, and this does not decide it either —
+   * `intUnbounded` reports it so an author can. Taking the strict reading would change the wire form
+   * of most `int` fields in every provider for a risk their authors have usually already ruled out.
+   */
+  it("says a number where nothing was declared, and the checker asks for a range instead", () => {
+    expect(intIsWide(spec(undefined))).toBe(false);
+  });
+
+  /**
+   * The reason the string form exists at all: a bound past 2^53 cannot be compared through a double.
+   * `Number("90071992547409921")` is `...920`, so the old conversion discarded exactly the digit the
+   * string was carrying.
+   */
+  it("compares the string form without going through a double", () => {
+    const m = model();
+    const big: Spec = {
+      shape: "scalar",
+      kernel: "int",
+      constraints: [
+        { name: "range", args: ["0", "..", "90071992547409920"], span: { file: "", start: 0, end: 0 } },
+      ],
+    };
+    expect(validate(m, big, "90071992547409920")).toEqual([]);
+    expect(validate(m, big, "90071992547409921")).not.toEqual([]);
   });
 });
 
