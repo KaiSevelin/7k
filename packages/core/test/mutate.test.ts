@@ -399,6 +399,37 @@ describe("adding a declaration", () => {
     expect(ws.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
   });
 
+  /**
+   * `@external` is the only way to say a pipe crosses the system boundary, because the boundary is
+   * derived from the marking and never declared (`03-topology.md` 2.6). It is also what lets a model
+   * built from nothing be run at all: a scenario publishes `as` a service that emits the message, and
+   * the thing that puts the first one on a queue is somebody else's.
+   */
+  it("marks a service as not ours when asked, and the model still checks out", () => {
+    const mutation = addService(editable(), {
+      pkg: "acme.sales",
+      name: "Storefront",
+      external: true,
+    });
+    const after = check(FILES, mutation);
+    expect(after["sales.7k"]).toContain("service Storefront @external {");
+    // It says which it wrote. The undo history and Spider's status line read this, and "add service"
+    // for a declaration that is explicitly not ours would be the one word that mattered going missing.
+    expect(mutation.describe).toBe("add external service Storefront to acme.sales");
+
+    const ws = buildWorkspace(Object.entries(after).map(([path, source]) => ({ path, source })));
+    expect(ws.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    const added = ws.model.decls.find((d) => d.id.name === "Storefront");
+    expect(added?.kind).toBe("service");
+    expect(added?.kind === "service" && added.external).toBe(true);
+  });
+
+  it("leaves the annotation off unless it is asked for", () => {
+    expect(check(FILES, addService(editable(), { pkg: "acme.sales", name: "Reporting" }))["sales.7k"]).not.toContain(
+      "@external",
+    );
+  });
+
   it("appends a pipe with a retention, because unconstrained is a decision nobody made", () => {
     const after = check(FILES, addPipe(editable(), { pkg: "acme.sales", name: "audit", kind: "topic" }));
     expect(after["sales.7k"]).toContain("pipe audit : topic {");

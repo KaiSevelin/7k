@@ -327,9 +327,30 @@ interface AddTo {
   readonly name: string;
 }
 
-/** `service X { }`, appended to a package's file. */
-export function addService(editable: Editable, what: AddTo): Mutation {
-  return addDecl(editable, what, "addService", `service ${what.name} {\n}\n`);
+/**
+ * `service X { }`, appended to a package's file.
+ *
+ * `external` writes `@external`, which `03-topology.md` 2.6 defines as *this is not ours*: nothing is
+ * generated for it, and a pipe with one at either end is a boundary pipe — derived from the marking
+ * rather than declared, so this is the only way to say it.
+ *
+ * It is also what makes a model runnable from its edge. A scenario publishes `as` a service that
+ * declares it emits the message, and the thing that puts the first message on a queue is usually not
+ * ours: a storefront, a partner feed, a till. Without a way to write one, a model built from nothing
+ * has no producer for its own entry point and no scenario can start it.
+ */
+export function addService(
+  editable: Editable,
+  what: AddTo & { readonly external?: boolean },
+): Mutation {
+  const annotation = what.external === true ? " @external" : "";
+  return addDecl(
+    editable,
+    what,
+    "addService",
+    `service ${what.name}${annotation} {\n}\n`,
+    what.external === true ? `add external service ${what.name} to ${what.pkg}` : undefined,
+  );
 }
 
 /** `pipe x : queue { ... }`, appended to a package's file. */
@@ -2493,8 +2514,17 @@ export function addAdvance(
 }
 
 
-function addDecl(editable: Editable, what: AddTo, op: string, text: string): Mutation {
-  const describe = `${op.replace("add", "add ").toLowerCase()} ${what.name} to ${what.pkg}`;
+function addDecl(
+  editable: Editable,
+  what: AddTo,
+  op: string,
+  text: string,
+  // What this says it is doing, where the operation's own name does not say it. An `@external`
+  // service is written by `addService` and is not a service of ours, and the undo history, the status
+  // line and the preview heading all read this.
+  says?: string,
+): Mutation {
+  const describe = says ?? `${op.replace("add", "add ").toLowerCase()} ${what.name} to ${what.pkg}`;
   const { model } = editable;
 
   const pkg = model.packages.get(what.pkg);
